@@ -1,6 +1,5 @@
-import { Logger } from "@datalayer/agent-runtimes/lib/portable/hosts";
-
 import { readConfig } from "./config.js";
+import { WhatsAppLogger } from "./observability.js";
 import { createResources } from "./resources.js";
 import { createHttpServer, type Routes } from "./server.js";
 import { webhookRoutes, type WhatsAppJob } from "./webhook.js";
@@ -10,10 +9,8 @@ import { webhookRoutes, type WhatsAppJob } from "./webhook.js";
  * health; the ingress serves Meta's webhook, persisting before it answers;
  * the worker works the durable queue.
  */
-const LOG_SALT =
-  process.env.DATALAYER_WHATSAPP_LOG_SALT ?? "datalayer-whatsapp";
 const config = readConfig();
-const logger = new Logger(undefined, undefined, LOG_SALT);
+const logger = new WhatsAppLogger();
 const resources = createResources(config);
 const { store, queue } = resources;
 const role = config.DATALAYER_WHATSAPP_ROLE;

@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 
+import { PHONE_FIELDS } from "./observability.js";
 import type { Routes } from "./server.js";
 import {
   MESSAGE_STATUSES,
@@ -199,16 +200,6 @@ export type Normalized = {
   statuses: StatusUpdate[];
   ignored: string[];
 };
-
-/** Field names under which Meta puts a phone number: never kept. */
-const PHONE_FIELDS = new Set([
-  "display_phone_number",
-  "from",
-  "new_wa_id",
-  "phone_number",
-  "recipient_id",
-  "wa_id",
-]);
 
 /** A copy of an account event's value without any phone number field. */
 export function withoutPhoneNumbers(value: unknown, depth = 0): unknown {

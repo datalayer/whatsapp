@@ -12,6 +12,7 @@ import {
   type Reply,
   type Standing,
 } from "../../src/commands.js";
+import { Metrics } from "../../src/observability.js";
 import { WindowKeeper } from "../../src/window.js";
 import { FakeHosts } from "../support/hosts.js";
 import {
@@ -74,7 +75,11 @@ describe.each(storeCases())("the words on $name", ({ store }) => {
       hosts,
       logger,
       store: kept,
-      window: new WindowKeeper(kept, { now: () => Date.UTC(2026, 9, 22, 13) }),
+      window: new WindowKeeper(
+        kept,
+        { now: () => Date.UTC(2026, 9, 22, 13) },
+        new Metrics(logger),
+      ),
       webUrl: "https://datalayer.example/",
     };
     return {

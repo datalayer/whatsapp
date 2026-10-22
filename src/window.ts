@@ -4,6 +4,7 @@ import { z } from "zod";
 import approvalWaiting from "../templates/datalayer_approval_waiting.json" with { type: "json" };
 import linkReminder from "../templates/datalayer_link_reminder.json" with { type: "json" };
 import turnDone from "../templates/datalayer_turn_done.json" with { type: "json" };
+import type { Metrics } from "./observability.js";
 import type {
   ChatKey,
   Hold,
@@ -134,6 +135,7 @@ export class WindowKeeper {
   constructor(
     readonly store: WhatsAppStore,
     readonly clock: Pick<Clock, "now">,
+    readonly metrics: Metrics,
   ) {}
 
   /**
@@ -168,8 +170,13 @@ export class WindowKeeper {
     const chat = await this.store.chat(key);
     if (!chat) return { send: "unreachable" };
     const now = this.clock.now();
-    if (now - chat.lastInboundAt.getTime() < WINDOW_MS) return { send: "now" };
-    await this.store.hold(key, held.kind, held.ref, new Date(now));
+    if (now - chat.lastInboundAt.getTime() < WINDOW_MS) {
+      this.metrics.count("window", { kind: held.kind, window: "inside" });
+      return { send: "now" };
+    }
+    this.metrics.count("window", { kind: held.kind, window: "outside" });
+    if (await this.store.hold(key, held.kind, held.ref, new Date(now)))
+      this.metrics.count("holds", { kind: held.kind });
     if (chat.noticesStopped) return { send: "held", why: "stopped" };
     if (await this.paused(chat.wabaId)) return { send: "held", why: "paused" };
     if (
@@ -181,6 +188,7 @@ export class WindowKeeper {
     )
       return { send: "held", why: "joined" };
     const template = TEMPLATES[held.kind];
+    this.metrics.count("notices", { template: template.name });
     return {
       send: "notice",
       template: {
@@ -247,6 +255,7 @@ export class WindowKeeper {
 
   /** A message the number sent: counted by month and category, as Meta's meter counts it. */
   async sent(phoneNumberId: string, category: MessageCategory): Promise<void> {
+    this.metrics.count("messages", { category });
     await this.store.countMessage(
       phoneNumberId,
       monthOf(new Date(this.clock.now())),

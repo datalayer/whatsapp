@@ -23,6 +23,7 @@ export const BUNDLE: BuildOptions = {
   absWorkingDir: new URL(".", root).pathname,
   bundle: true,
   entryPoints: {
+    "dead-letters": "src/dead-letters-cli.ts",
     index: "src/index.ts",
     migrate: "scripts/migrate.ts",
   },

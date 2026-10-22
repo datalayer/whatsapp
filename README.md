@@ -27,6 +27,12 @@ WhatsApp lets a business say anything for 24 hours after the person's last messa
 
 Every hour the worker deletes chats and what they hold 30 days after the person's last message, message statuses after 30 days, claims after 8 days (Meta retries a webhook for 7), dead jobs after 14 days and quota counts after a day. Message ids are kept only as their SHA-256 (they may embed a phone number). `forget` deletes every row naming the person at once.
 
+## Logs and dead letters
+
+Logs are JSON lines through the hosts kit's logger (credentials and words redacted by field and shape), and WhatsApp's own scrub on top: a phone number in any writing becomes `[phone]`, a BSUID its pseudonym (salted with `DATALAYER_WHATSAPP_LOG_SALT`), wherever it appears. Spans name a number and a person by pseudonym only; counters (`turns`, `messages` by category, `notices`, `holds`, `pair_rate_limited`, `window` inside or outside) are `metric` lines.
+
+A job that fails five times is dead, kept 14 days. `node dist/dead-letters.js list | replay <id> | payload <id> <reason…>` (in development `node --import tsx src/dead-letters-cli.ts …`) against `DATABASE_URL`, with `DATALAYER_OPERATOR` naming who acts: `list` shows metadata and hashes only, `payload` one dead job's for a stated reason, `replay` puts it back to work; every read and replay is kept with the operator's name.
+
 ## Security and privacy
 
 `docs/threat-model.md` (what Meta sees, what this service keeps and for how long, each threat with its control and test) and the decisions in `docs/adr/`: Meta's Cloud API directly (0001), the business-scoped user id as the identity with no phone number kept (0002), the 24-hour window and templates without content (0003). Drafts until signed off: no business token is stored before.

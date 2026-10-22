@@ -6,7 +6,13 @@ import {
   TEMPLATES,
   WindowKeeper,
 } from "../../src/window.js";
-import { ALICE, PHONE_NUMBER_ID, WABA } from "../support/meta.js";
+import { Metrics } from "../../src/observability.js";
+import {
+  ALICE,
+  capturingLogger,
+  PHONE_NUMBER_ID,
+  WABA,
+} from "../support/meta.js";
 import { storeCases } from "../support/stores.js";
 
 /**
@@ -42,12 +48,13 @@ describe.each(storeCases())("the window on $name", ({ store }) => {
   const chat = { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE, wabaId: WABA };
   const setup = async (templates = true) => {
     const clock = { at: START, now: () => clock.at };
-    const keeper = new WindowKeeper(store(), clock);
+    const metrics = new Metrics(capturingLogger().logger);
+    const keeper = new WindowKeeper(store(), clock, metrics);
     if (templates)
       for (const name of TEMPLATE_NAMES)
         await keeper.created(WABA, name, "APPROVED", "UTILITY");
     await keeper.received(chat, new Date(START));
-    return { clock, keeper, kept: keeper.store };
+    return { clock, keeper, kept: keeper.store, metrics };
   };
   const notice = (name: string) => ({
     send: "notice",
@@ -79,6 +86,25 @@ describe.each(storeCases())("the window on $name", ({ store }) => {
     expect(await kept.holds(chat)).toEqual([]);
     expect(await keeper.received(chat, new Date(clock.at))).toEqual([]);
     expect(await keeper.open(chat)).toBe(true);
+  });
+
+  it("counts sends inside and outside the window, holds and notices", async () => {
+    const { clock, keeper, metrics } = await setup();
+    await keeper.route(chat, { kind: "delivery", ref: "dl-1" }, "Help Desk");
+    clock.at = START + 25 * HOUR;
+    await keeper.route(chat, { kind: "delivery", ref: "dl-2" }, "Help Desk");
+    await keeper.route(chat, { kind: "approval", ref: "ap-1" }, "Help Desk");
+    await keeper.route(chat, { kind: "approval", ref: "ap-1" }, "Help Desk");
+    expect(
+      metrics.total("window", { kind: "delivery", window: "inside" }),
+    ).toBe(1);
+    expect(
+      metrics.total("window", { kind: "approval", window: "outside" }),
+    ).toBe(2);
+    expect(metrics.total("holds", { kind: "approval" })).toBe(1);
+    expect(metrics.total("notices", { template: "datalayer_turn_done" })).toBe(
+      1,
+    );
   });
 
   it("joins a second event to the first notice, and notices again only after 24 hours", async () => {

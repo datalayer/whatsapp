@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runWord, SAY, type CommandContext } from "../../src/commands.js";
 import { MemoryStore } from "../../src/store.js";
+import { Metrics } from "../../src/observability.js";
 import { WindowKeeper } from "../../src/window.js";
 import {
   ALICE,
@@ -135,7 +136,11 @@ describe("link and unlink against ai-agents' routes", () => {
       logger,
       store,
       webUrl: "https://datalayer.example",
-      window: new WindowKeeper(store, { now: () => Date.now() }),
+      window: new WindowKeeper(
+        store,
+        { now: () => Date.now() },
+        new Metrics(logger),
+      ),
     };
     return {
       lines,

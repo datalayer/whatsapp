@@ -1,6 +1,6 @@
-import { Logger } from "@datalayer/agent-runtimes/lib/portable/hosts";
 import type { AddressInfo } from "node:net";
 
+import { WhatsAppLogger } from "../../src/observability.js";
 import { createHttpServer, type Routes } from "../../src/server.js";
 import { signatureOf } from "../../src/verify.js";
 
@@ -77,9 +77,9 @@ export function webhook(
 }
 
 /** A logger that keeps its lines, for a test to read. */
-export function capturingLogger(): { logger: Logger; lines: string[] } {
+export function capturingLogger(): { logger: WhatsAppLogger; lines: string[] } {
   const lines: string[] = [];
-  return { lines, logger: new Logger((line) => lines.push(line)) };
+  return { lines, logger: new WhatsAppLogger((line) => lines.push(line)) };
 }
 
 /** The routes served on a real socket on 127.0.0.1, and how to close it. */
