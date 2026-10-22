@@ -1,3 +1,4 @@
+import type { EncryptedSecret } from "@datalayer/agent-runtimes/lib/portable/hosts";
 import { createHash } from "node:crypto";
 
 /**
@@ -76,7 +77,82 @@ export type Chat = ChatKey &
     noticesStopped: boolean;
     /** The last notice sent outside the window. */
     lastNoticeAt?: Date;
+    /** The session of the current generation, once a turn started it, and its deployment. */
+    sessionUid?: string;
+    sessionDeployment?: string;
+    /** A session whose last answer is not shown yet: a `turn.completed` delivery shows it. */
+    unshownSessionUid?: string;
+    /** Whether the disclosure line was said in this chat. */
+    disclosed: boolean;
+    /** The question the last answer ended on, to answer a pressed option. */
+    asking?: Asking;
+    /** The turn running in this chat, while its lease holds. */
+    turn?: RunningTurn;
   }>;
+
+/** A question a turn ended on: its options, by the session that asked. */
+export type Asking = Readonly<{ sessionUid: string; options: string[] }>;
+
+/** The one turn a chat runs at a time: who works it, until when, and its session once started. */
+export type RunningTurn = Readonly<{
+  owner: string;
+  until: Date;
+  sessionUid?: string;
+  deploymentUid?: string;
+  /** Stop was asked (the word or the button). */
+  stop: boolean;
+}>;
+
+/** A claim on a chat's turn: taken, or held by another owner. */
+export type TurnClaim =
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; owner: string }>;
+
+export type InstallationState = "active" | "paused" | "removed";
+
+/**
+ * A connected business number, bound at Datalayer as
+ * `<waba_id>:<phone_number_id>`. Every secret is encrypted, bound to the
+ * installation (`installationData`); a removed one keeps no business token,
+ * PIN or delivery secret.
+ */
+export type Installation = Readonly<{
+  wabaId: string;
+  phoneNumberId: string;
+  hostUid: string;
+  hostKey: EncryptedSecret;
+  businessToken?: EncryptedSecret;
+  pin?: EncryptedSecret;
+  deliverySecret?: EncryptedSecret;
+  /** The account the installation belongs to at Datalayer (its quota's organization). */
+  organizationUid: string;
+  /** The business's name as Meta verified it: what the disclosure line says. */
+  businessName: string;
+  /** How a person reaches someone at the business: a phone, a mail address, a page. */
+  support: string;
+  state: InstallationState;
+  removedAt?: Date;
+}>;
+
+/** What each secret of an installation is bound to (its associated data). */
+export const installationData = (
+  what: "host-key" | "business-token" | "pin" | "delivery",
+  wabaId: string,
+  phoneNumberId: string,
+): string => `${what}:${wabaId}:${phoneNumberId}`;
+
+/** An approval card shown in a person's chat, and how it ended. */
+export type ApprovalCardRow = Readonly<{
+  phoneNumberId: string;
+  userId: string;
+  approvalId: string;
+  deploymentUid: string;
+  /** The presentation's digest, as shown: a decision is taken on it only. */
+  digest: string;
+  toolName: string;
+  shownAt: Date;
+  decidedStatus?: string;
+}>;
 
 /** What waits for the window to reopen: a reference, never content. */
 export type HoldKind = "delivery" | "approval" | "link";
@@ -96,6 +172,8 @@ export type MessageCategory = "service" | "utility";
 export const RETENTION = {
   /** A chat and what it holds: 30 days after the person's last message. */
   chatMs: 30 * 24 * 60 * 60 * 1000,
+  /** An approval card. */
+  cardMs: 30 * 24 * 60 * 60 * 1000,
   /** A sent message's status. */
   statusMs: 30 * 24 * 60 * 60 * 1000,
   /** A claim: Meta retries a webhook for 7 days, so a day more. */
@@ -165,6 +243,86 @@ export interface WhatsAppStore {
   forget(userId: string): Promise<number>;
   /** Delete what is past its keeping (`RETENTION`), as of `now`. */
   retain(now: Date): Promise<Retained>;
+
+  /** A claim taken once (`false` when it was), in the kit's claims table. */
+  claimEvent(id: string): Promise<boolean>;
+  releaseEvent(id: string): Promise<void>;
+
+  /** Keep an installation: a reinstall of the same number replaces it, removed or not. */
+  saveInstallation(installation: Installation): Promise<void>;
+  installation(
+    wabaId: string,
+    phoneNumberId: string,
+  ): Promise<Installation | undefined>;
+  installationByHost(hostUid: string): Promise<Installation | undefined>;
+  installations(state?: InstallationState): Promise<Installation[]>;
+  /** Pause or resume: `false` for an unknown or removed installation. */
+  setInstallationState(
+    wabaId: string,
+    phoneNumberId: string,
+    state: "active" | "paused",
+  ): Promise<boolean>;
+  /**
+   * Removed at `at`, its business token, PIN and delivery secret dropped at
+   * once: `false` when it is unknown or was removed already.
+   */
+  removeInstallation(
+    wabaId: string,
+    phoneNumberId: string,
+    at: Date,
+  ): Promise<boolean>;
+  /**
+   * Every row of a number deleted: the installation, its chats and what
+   * they hold, its cards, statuses, counts, queued jobs and quota counts;
+   * the account's templates when no other number of it is kept. Answers how many rows.
+   */
+  purgeInstallation(wabaId: string, phoneNumberId: string): Promise<number>;
+
+  /** The disclosure line is said once per chat: `true` the first time. */
+  markDisclosed(key: ChatKey): Promise<boolean>;
+  /** Take the chat's turn until `until`; a lease past `now` is taken over. */
+  claimTurn(
+    key: ChatKey,
+    owner: string,
+    until: Date,
+    now: Date,
+  ): Promise<TurnClaim>;
+  renewTurn(key: ChatKey, owner: string, until: Date): Promise<void>;
+  setTurnSession(
+    key: ChatKey,
+    owner: string,
+    sessionUid: string,
+    deploymentUid: string,
+  ): Promise<void>;
+  /** Stop asked of the running turn: the turn, or nothing when none runs at `now`. */
+  requestStop(key: ChatKey, now: Date): Promise<RunningTurn | undefined>;
+  releaseTurn(key: ChatKey, owner: string): Promise<void>;
+  /** The chat's session for this generation; `unshown` until its answer is shown. */
+  setSession(
+    key: ChatKey,
+    session: Readonly<{
+      sessionUid: string;
+      deploymentUid: string;
+      unshown: boolean;
+    }>,
+  ): Promise<void>;
+  /** The session's answer is shown: `true` only for the one who marks it first. */
+  markShown(key: ChatKey, sessionUid: string): Promise<boolean>;
+  setAsking(key: ChatKey, asking: Asking | undefined): Promise<void>;
+
+  /** A card shown; shown again (a new digest) it replaces the old one. */
+  saveCard(card: ApprovalCardRow): Promise<void>;
+  card(
+    phoneNumberId: string,
+    userId: string,
+    approvalId: string,
+  ): Promise<ApprovalCardRow | undefined>;
+  decideCard(
+    phoneNumberId: string,
+    userId: string,
+    approvalId: string,
+    status: string,
+  ): Promise<void>;
 }
 
 const chatKeyOf = (key: ChatKey): string =>
@@ -177,6 +335,10 @@ export class MemoryStore implements WhatsAppStore {
   readonly #holds = new Map<string, (Hold & ChatKey)[]>();
   readonly #templates = new Map<string, Map<string, TemplateRow>>();
   readonly #counts = new Map<string, number>();
+  readonly #claims = new Map<string, Date>();
+  readonly #installations = new Map<string, Installation>();
+  readonly #cards = new Map<string, ApprovalCardRow>();
+  /** Quota counts and queued jobs live in the kit's stores: memory keeps none here. */
 
   async applyStatus(update: StatusUpdate): Promise<void> {
     const kept = this.#statuses.get(wamidHash(update.wamid));
@@ -209,6 +371,7 @@ export class MemoryStore implements WhatsAppStore {
               : at,
         }
       : {
+          disclosed: false,
           generation: 0,
           lastInboundAt: at,
           noticesStopped: false,
@@ -228,8 +391,15 @@ export class MemoryStore implements WhatsAppStore {
     const kept = this.#chats.get(chatKeyOf(key));
     if (!kept) throw new Error("startOver names a chat the service never saw.");
     const generation = kept.generation + 1;
+    const {
+      asking: _asking,
+      sessionDeployment: _deployment,
+      sessionUid: _session,
+      ...rest
+    } = kept;
+    void [_asking, _deployment, _session];
     this.#chats.set(chatKeyOf(key), {
-      ...kept,
+      ...rest,
       generation,
       ...(applicationId !== undefined ? { applicationId } : {}),
     });
@@ -331,6 +501,11 @@ export class MemoryStore implements WhatsAppStore {
         this.#holds.delete(key);
         count += held.length;
       }
+    for (const [key, card] of this.#cards)
+      if (card.userId === userId) {
+        this.#cards.delete(key);
+        count += 1;
+      }
     return count;
   }
 
@@ -357,6 +532,262 @@ export class MemoryStore implements WhatsAppStore {
         this.#statuses.delete(key);
         out.statuses = (out.statuses ?? 0) + 1;
       }
+    out.cards = 0;
+    for (const [key, card] of this.#cards)
+      if (card.shownAt.getTime() < before(RETENTION.cardMs)) {
+        this.#cards.delete(key);
+        out.cards += 1;
+      }
+    out.claims = 0;
+    for (const [id, at] of this.#claims)
+      if (at.getTime() < before(RETENTION.claimMs)) {
+        this.#claims.delete(id);
+        out.claims += 1;
+      }
     return out;
+  }
+
+  async claimEvent(id: string): Promise<boolean> {
+    if (this.#claims.has(id)) return false;
+    this.#claims.set(id, new Date());
+    return true;
+  }
+
+  async releaseEvent(id: string): Promise<void> {
+    this.#claims.delete(id);
+  }
+
+  async saveInstallation(installation: Installation): Promise<void> {
+    this.#installations.set(
+      JSON.stringify([installation.wabaId, installation.phoneNumberId]),
+      installation,
+    );
+  }
+
+  async installation(
+    wabaId: string,
+    phoneNumberId: string,
+  ): Promise<Installation | undefined> {
+    return this.#installations.get(JSON.stringify([wabaId, phoneNumberId]));
+  }
+
+  async installationByHost(hostUid: string): Promise<Installation | undefined> {
+    return [...this.#installations.values()].find(
+      (one) => one.hostUid === hostUid,
+    );
+  }
+
+  async installations(state?: InstallationState): Promise<Installation[]> {
+    return [...this.#installations.values()].filter(
+      (one) => !state || one.state === state,
+    );
+  }
+
+  async setInstallationState(
+    wabaId: string,
+    phoneNumberId: string,
+    state: "active" | "paused",
+  ): Promise<boolean> {
+    const kept = await this.installation(wabaId, phoneNumberId);
+    if (!kept || kept.state === "removed") return false;
+    await this.saveInstallation({ ...kept, state });
+    return true;
+  }
+
+  async removeInstallation(
+    wabaId: string,
+    phoneNumberId: string,
+    at: Date,
+  ): Promise<boolean> {
+    const kept = await this.installation(wabaId, phoneNumberId);
+    if (!kept || kept.state === "removed") return false;
+    const {
+      businessToken: _token,
+      deliverySecret: _secret,
+      pin: _pin,
+      ...rest
+    } = kept;
+    void [_token, _secret, _pin];
+    await this.saveInstallation({ ...rest, removedAt: at, state: "removed" });
+    return true;
+  }
+
+  async purgeInstallation(
+    wabaId: string,
+    phoneNumberId: string,
+  ): Promise<number> {
+    let count = 0;
+    if (this.#installations.delete(JSON.stringify([wabaId, phoneNumberId])))
+      count += 1;
+    for (const [key, chat] of this.#chats)
+      if (chat.phoneNumberId === phoneNumberId) {
+        this.#chats.delete(key);
+        count += 1;
+      }
+    for (const [key, held] of this.#holds)
+      if (held[0]?.phoneNumberId === phoneNumberId) {
+        this.#holds.delete(key);
+        count += held.length;
+      }
+    for (const [key, card] of this.#cards)
+      if (card.phoneNumberId === phoneNumberId) {
+        this.#cards.delete(key);
+        count += 1;
+      }
+    for (const [key, status] of this.#statuses)
+      if (status.phoneNumberId === phoneNumberId) {
+        this.#statuses.delete(key);
+        count += 1;
+      }
+    for (const key of this.#counts.keys())
+      if ((JSON.parse(key) as string[])[0] === phoneNumberId) {
+        this.#counts.delete(key);
+        count += 1;
+      }
+    if (
+      ![...this.#installations.values()].some((one) => one.wabaId === wabaId)
+    ) {
+      count += this.#templates.get(wabaId)?.size ?? 0;
+      this.#templates.delete(wabaId);
+    }
+    return count;
+  }
+
+  #update(key: ChatKey, change: (chat: Chat) => Chat | undefined): boolean {
+    const kept = this.#chats.get(chatKeyOf(key));
+    if (!kept) return false;
+    const changed = change(kept);
+    if (!changed) return false;
+    this.#chats.set(chatKeyOf(key), changed);
+    return true;
+  }
+
+  async markDisclosed(key: ChatKey): Promise<boolean> {
+    return this.#update(key, (chat) =>
+      chat.disclosed ? undefined : { ...chat, disclosed: true },
+    );
+  }
+
+  async claimTurn(
+    key: ChatKey,
+    owner: string,
+    until: Date,
+    now: Date,
+  ): Promise<TurnClaim> {
+    const kept = this.#chats.get(chatKeyOf(key));
+    if (!kept) throw new Error("claimTurn names a chat the service never saw.");
+    if (
+      kept.turn &&
+      kept.turn.owner !== owner &&
+      kept.turn.until.getTime() > now.getTime()
+    )
+      return { ok: false, owner: kept.turn.owner };
+    this.#chats.set(chatKeyOf(key), {
+      ...kept,
+      turn: { owner, stop: false, until },
+    });
+    return { ok: true };
+  }
+
+  async renewTurn(key: ChatKey, owner: string, until: Date): Promise<void> {
+    this.#update(key, (chat) =>
+      chat.turn?.owner === owner
+        ? { ...chat, turn: { ...chat.turn, until } }
+        : undefined,
+    );
+  }
+
+  async setTurnSession(
+    key: ChatKey,
+    owner: string,
+    sessionUid: string,
+    deploymentUid: string,
+  ): Promise<void> {
+    this.#update(key, (chat) =>
+      chat.turn?.owner === owner
+        ? { ...chat, turn: { ...chat.turn, deploymentUid, sessionUid } }
+        : undefined,
+    );
+  }
+
+  async requestStop(key: ChatKey, now: Date): Promise<RunningTurn | undefined> {
+    const kept = this.#chats.get(chatKeyOf(key));
+    const turn = kept?.turn;
+    if (!kept || !turn || turn.until.getTime() <= now.getTime())
+      return undefined;
+    const stopped = { ...turn, stop: true };
+    this.#chats.set(chatKeyOf(key), { ...kept, turn: stopped });
+    return stopped;
+  }
+
+  async releaseTurn(key: ChatKey, owner: string): Promise<void> {
+    this.#update(key, (chat) => {
+      if (chat.turn?.owner !== owner) return undefined;
+      const { turn: _turn, ...rest } = chat;
+      void _turn;
+      return rest;
+    });
+  }
+
+  async setSession(
+    key: ChatKey,
+    session: Readonly<{
+      sessionUid: string;
+      deploymentUid: string;
+      unshown: boolean;
+    }>,
+  ): Promise<void> {
+    this.#update(key, (chat) => {
+      const { unshownSessionUid: _unshown, ...rest } = chat;
+      void _unshown;
+      return {
+        ...rest,
+        sessionDeployment: session.deploymentUid,
+        sessionUid: session.sessionUid,
+        ...(session.unshown ? { unshownSessionUid: session.sessionUid } : {}),
+      };
+    });
+  }
+
+  async markShown(key: ChatKey, sessionUid: string): Promise<boolean> {
+    return this.#update(key, (chat) => {
+      if (chat.unshownSessionUid !== sessionUid) return undefined;
+      const { unshownSessionUid: _unshown, ...rest } = chat;
+      void _unshown;
+      return rest;
+    });
+  }
+
+  async setAsking(key: ChatKey, asking: Asking | undefined): Promise<void> {
+    this.#update(key, (chat) => {
+      const { asking: _asking, ...rest } = chat;
+      void _asking;
+      return asking ? { ...rest, asking } : rest;
+    });
+  }
+
+  async saveCard(card: ApprovalCardRow): Promise<void> {
+    this.#cards.set(
+      JSON.stringify([card.phoneNumberId, card.userId, card.approvalId]),
+      card,
+    );
+  }
+
+  async card(
+    phoneNumberId: string,
+    userId: string,
+    approvalId: string,
+  ): Promise<ApprovalCardRow | undefined> {
+    return this.#cards.get(JSON.stringify([phoneNumberId, userId, approvalId]));
+  }
+
+  async decideCard(
+    phoneNumberId: string,
+    userId: string,
+    approvalId: string,
+    status: string,
+  ): Promise<void> {
+    const kept = await this.card(phoneNumberId, userId, approvalId);
+    if (kept) await this.saveCard({ ...kept, decidedStatus: status });
   }
 }

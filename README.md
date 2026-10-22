@@ -6,7 +6,7 @@
 
 A business connects **its own WhatsApp number** to an application it deployed on Datalayer, and the application answers on that number: the same session, rules, tools, connections, approvals and record as on datalayer.ai. WhatsApp is a host of Datalayer's existing session and approval contracts (the shared host kit in agent-runtimes' `src/portable/hosts`, `kind: "whatsapp"`); it is not a separate agent runtime. The service speaks Meta's WhatsApp Business Platform (Cloud API) directly.
 
-**State:** the webhook ingress, the words a person writes (`src/commands.ts`) and the 24-hour window keeper (`src/window.ts`, the notice templates in `templates/`), not yet wired to a worker. Install, turns, deliveries and approvals are not built yet; nothing is deployed.
+**State:** the webhook ingress, the worker's 1:1 turn (`src/worker.ts`, Meta behind `src/meta-port.ts`, WhatsApp's forms in `src/render.ts`), the words a person writes (`src/commands.ts`) and the 24-hour window keeper (`src/window.ts`, the notice templates in `templates/`). Nothing is deployed.
 
 ## What it does today
 
@@ -14,6 +14,20 @@ A business connects **its own WhatsApp number** to an application it deployed on
 - `POST /whatsapp/webhook` reads the raw body up to 3 MB (413 past it), checks `X-Hub-Signature-256` (the HMAC-SHA256 of the raw body with the Meta app's secret; 401 otherwise), claims each message once by its `wamid` and enqueues it with its claim in one transaction, keeps each sent message's furthest status (`sent`, `delivered`, `read`, `played`, `failed`), hands account events to the worker, and answers 200 at once. A duplicate claims nothing and is answered 200; anything not persisted is answered 500, so that Meta tries again.
 - Every phone number Meta sends is dropped at the ingress: a person is their business-scoped user id (BSUID), never their number.
 - `/healthz` and `/readyz` on every role.
+
+## A question in a chat
+
+A linked person writes to the number; the worker:
+
+- reopens the 24-hour window and says first what it held for them;
+- checks their standing at Datalayer (their link), the application (the one they chose with `app`, else the number's default, allowed by the installation) and the quotas per person, number, organization and application, taken once per message;
+- says the disclosure line once per chat;
+- marks the message read with the typing indicator, in one call; past the indicator's 25 seconds, ⏳ on the message; past 30 seconds, one _Still working on it_ with **Stop**, then at most one a minute;
+- runs the turn as the person (the chat's session for its generation, idempotent on the message, named by its id's hash: Meta's message ids may embed a phone number);
+- writes the answer whole, since WhatsApp has no edit: WhatsApp's own marks for bold, italic, strike, monospace and lists, tables of four columns or fewer in monospace, links as a numbered footer, up to 4,096 characters a message split at paragraphs into at most four messages 10 seconds apart; a longer answer, or a wider table, also comes whole as a Markdown document, with **Open in Datalayer** (a one-use link for the person);
+- asks the question a turn ends on as reply buttons (three short options), a list (ten) or words.
+
+An answer holding anything shaped like a credential is never written in the chat (a message rests at Meta for 30 days): the person gets **Open in Datalayer** only. A turn that outlives the window ends with a notice, and the answer comes with the person's reply. A person without a link is told once a day how to link; a paused number says so once a day.
 
 ## The words
 
@@ -39,15 +53,24 @@ A job that fails five times is dead, kept 14 days. `node dist/dead-letters.js li
 
 ## Settings
 
-| Setting                           | What it is                                                                     |
-| --------------------------------- | ------------------------------------------------------------------------------ |
-| `NODE_ENV`                        | `development`, `test` or `production`                                          |
-| `PORT`                            | The HTTP port (3000)                                                           |
-| `DATALAYER_WHATSAPP_ROLE`         | `ingress`, `worker`, or `all` (one process, development only)                  |
-| `DATABASE_URL`                    | PostgreSQL; required in production and for every role but `all`                |
-| `DATALAYER_WHATSAPP_APP_SECRET`   | The Meta app's secret, which signs every webhook                               |
-| `DATALAYER_WHATSAPP_VERIFY_TOKEN` | What Meta's endpoint verification must echo, at least 16 characters            |
-| `DATALAYER_WHATSAPP_LOG_SALT`     | What log pseudonyms are salted with (optional; `datalayer-whatsapp` otherwise) |
+| Setting                                 | What it is                                                                        |
+| --------------------------------------- | --------------------------------------------------------------------------------- |
+| `NODE_ENV`                              | `development`, `test` or `production`                                             |
+| `PORT`                                  | The HTTP port (3000)                                                              |
+| `DATALAYER_WHATSAPP_ROLE`               | `ingress`, `worker`, or `all` (one process, development only)                     |
+| `DATABASE_URL`                          | PostgreSQL; required in production and for every role but `all`                   |
+| `DATALAYER_WHATSAPP_APP_SECRET`         | The Meta app's secret, which signs every webhook                                  |
+| `DATALAYER_WHATSAPP_VERIFY_TOKEN`       | What Meta's endpoint verification must echo, at least 16 characters               |
+| `DATALAYER_WHATSAPP_LOG_SALT`           | What log pseudonyms are salted with (optional; `datalayer-whatsapp` otherwise)    |
+| `DATALAYER_WHATSAPP_APP_ID`             | The Meta app's id, which Embedded Signup's code is exchanged with                 |
+| `DATALAYER_WHATSAPP_GRAPH_URL`          | The Graph API and its version (`https://graph.facebook.com/v23.0`)                |
+| `DATALAYER_WHATSAPP_SECRET_KEY`         | 32 bytes, base64: encrypts every secret at rest (host keys, business tokens)      |
+| `DATALAYER_WHATSAPP_SECRET_KEY_VERSION` | The key's version (1)                                                             |
+| `DATALAYER_WHATSAPP_APP_URL`            | The service's public address (the install, Datalayer's deliveries)                |
+| `DATALAYER_API_URL`                     | Datalayer's API (ai-agents, the session API)                                      |
+| `DATALAYER_WEB_URL`                     | Datalayer's web origin (links, _Open in Datalayer_, the Ship card)                |
+| `DATALAYER_DELIVERY_POLL_SECONDS`       | How often the outbox is read (30; 0 never)                                        |
+| `DATALAYER_WHATSAPP_WORKERS`            | Jobs the worker works at once on PostgreSQL (4), so `stop` reaches a running turn |
 
 Keep every value in a password manager until it reaches `.env` (development) or the Secret; never paste one into an issue, a chat, a commit or the shell's history.
 

@@ -92,6 +92,11 @@ jobs:
             -e NODE_ENV=test -e DATALAYER_WHATSAPP_ROLE=all \
             -e DATALAYER_WHATSAPP_APP_SECRET="ci-only-$(printf '%s' not-an-app-secret)" \
             -e DATALAYER_WHATSAPP_VERIFY_TOKEN=ci-only-verify-token \
+            -e DATALAYER_WHATSAPP_APP_ID=1000000000000001 \
+            -e DATALAYER_WHATSAPP_SECRET_KEY="$(head -c 32 /dev/zero | base64)" \
+            -e DATALAYER_WHATSAPP_APP_URL=https://whatsapp.example.test \
+            -e DATALAYER_API_URL=https://datalayer.example.test \
+            -e DATALAYER_WEB_URL=https://web.example.test \
             datalayer-whatsapp:ci
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/healthz; then curl -fsS http://127.0.0.1:3000/readyz; exit $?; fi

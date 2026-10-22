@@ -43,8 +43,10 @@ describe.runIf(Boolean(DATABASE_URL))("migrate on PostgreSQL", () => {
     expect(first).toEqual(
       [
         ...hostTables("whatsapp"),
+        "whatsapp_approval_card",
         "whatsapp_chat",
         "whatsapp_hold",
+        "whatsapp_installation",
         "whatsapp_message_count",
         "whatsapp_message_status",
         "whatsapp_template",

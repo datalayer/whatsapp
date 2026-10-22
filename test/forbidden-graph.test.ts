@@ -5,7 +5,8 @@ import { forbiddenInSources } from "../scripts/forbidden-sources.js";
 
 /**
  * What the service runs is one esbuild bundle: its sources and
- * agent-runtimes' `lib/portable/hosts`, nothing of Jupyter, React or another
+ * agent-runtimes' `lib/portable/hosts` (and the pure
+ * `lib/portable/signIn` it reads a PAP sign-in with), the notice templates, nothing of Jupyter, React or another
  * package; its dependencies external. Bundled here in memory (`write:
  * false`): analysis, nothing written.
  */
@@ -21,6 +22,8 @@ describe("the bundle graph", () => {
       expect(
         input.startsWith("src/") ||
           input.startsWith("scripts/") ||
+          // The notice templates, as created in each business account.
+          /^templates\/[a-z_]+\.json$/.test(input) ||
           /agent-runtimes\/lib\/portable\//.test(input),
         input,
       ).toBe(true);

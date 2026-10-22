@@ -1,7 +1,16 @@
-import type { Queryable } from "@datalayer/agent-runtimes/lib/portable/hosts";
+import type {
+  EncryptedSecret,
+  Queryable,
+} from "@datalayer/agent-runtimes/lib/portable/hosts";
 
 import {
   STATUS_RANK,
+  type ApprovalCardRow,
+  type Asking,
+  type Installation,
+  type InstallationState,
+  type RunningTurn,
+  type TurnClaim,
   type Chat,
   type ChatKey,
   type Hold,
@@ -26,13 +35,40 @@ type ChatRow = {
   application_id: string | null;
   notices_stopped: boolean;
   last_notice_at: Date | null;
+  session_uid: string | null;
+  session_deployment: string | null;
+  unshown_session_uid: string | null;
+  disclosed: boolean;
+  asking: Asking | null;
+  turn_owner: string | null;
+  turn_until: Date | null;
+  turn_session: string | null;
+  turn_deployment: string | null;
+  turn_stop: boolean;
 };
 
 const CHAT_COLUMNS = `phone_number_id, user_id, waba_id, last_inbound_at, generation,
-  application_id, notices_stopped, last_notice_at`;
+  application_id, notices_stopped, last_notice_at, session_uid, session_deployment,
+  unshown_session_uid, disclosed, asking, turn_owner, turn_until, turn_session,
+  turn_deployment, turn_stop`;
+
+function turnOf(row: ChatRow): RunningTurn | undefined {
+  if (row.turn_owner === null || row.turn_until === null) return undefined;
+  return {
+    owner: row.turn_owner,
+    stop: row.turn_stop,
+    until: row.turn_until,
+    ...(row.turn_session !== null ? { sessionUid: row.turn_session } : {}),
+    ...(row.turn_deployment !== null
+      ? { deploymentUid: row.turn_deployment }
+      : {}),
+  };
+}
 
 function chatOf(row: ChatRow): Chat {
+  const turn = turnOf(row);
   return {
+    disclosed: row.disclosed,
     generation: row.generation,
     lastInboundAt: row.last_inbound_at,
     noticesStopped: row.notices_stopped,
@@ -45,8 +81,74 @@ function chatOf(row: ChatRow): Chat {
     ...(row.last_notice_at !== null
       ? { lastNoticeAt: row.last_notice_at }
       : {}),
+    ...(row.session_uid !== null ? { sessionUid: row.session_uid } : {}),
+    ...(row.session_deployment !== null
+      ? { sessionDeployment: row.session_deployment }
+      : {}),
+    ...(row.unshown_session_uid !== null
+      ? { unshownSessionUid: row.unshown_session_uid }
+      : {}),
+    ...(row.asking !== null ? { asking: row.asking } : {}),
+    ...(turn ? { turn } : {}),
   };
 }
+
+type InstallationRow = {
+  waba_id: string;
+  phone_number_id: string;
+  host_uid: string;
+  host_key: EncryptedSecret;
+  business_token: EncryptedSecret | null;
+  pin: EncryptedSecret | null;
+  delivery_secret: EncryptedSecret | null;
+  organization_uid: string;
+  business_name: string;
+  support: string;
+  state: InstallationState;
+  removed_at: Date | null;
+};
+
+const INSTALLATION_COLUMNS = `waba_id, phone_number_id, host_uid, host_key, business_token,
+  pin, delivery_secret, organization_uid, business_name, support, state, removed_at`;
+
+function installationOf(row: InstallationRow): Installation {
+  return {
+    businessName: row.business_name,
+    hostKey: row.host_key,
+    hostUid: row.host_uid,
+    organizationUid: row.organization_uid,
+    phoneNumberId: row.phone_number_id,
+    state: row.state,
+    support: row.support,
+    wabaId: row.waba_id,
+    ...(row.business_token ? { businessToken: row.business_token } : {}),
+    ...(row.pin ? { pin: row.pin } : {}),
+    ...(row.delivery_secret ? { deliverySecret: row.delivery_secret } : {}),
+    ...(row.removed_at ? { removedAt: row.removed_at } : {}),
+  };
+}
+
+type CardRow = {
+  phone_number_id: string;
+  user_id: string;
+  approval_id: string;
+  deployment_uid: string;
+  digest: string;
+  tool_name: string;
+  shown_at: Date;
+  decided_status: string | null;
+};
+
+const cardOf = (row: CardRow): ApprovalCardRow => ({
+  approvalId: row.approval_id,
+  deploymentUid: row.deployment_uid,
+  digest: row.digest,
+  phoneNumberId: row.phone_number_id,
+  shownAt: row.shown_at,
+  toolName: row.tool_name,
+  userId: row.user_id,
+  ...(row.decided_status !== null ? { decidedStatus: row.decided_status } : {}),
+});
 
 type HoldRow = { kind: HoldKind; ref: string; held_at: Date };
 
@@ -137,6 +239,9 @@ export class PostgresStore implements WhatsAppStore {
       `UPDATE whatsapp_chat SET
          generation = generation + 1,
          application_id = COALESCE($3, application_id),
+         session_uid = NULL,
+         session_deployment = NULL,
+         asking = NULL,
          updated_at = now()
        WHERE phone_number_id = $1 AND user_id = $2
        RETURNING generation`,
@@ -284,6 +389,10 @@ export class PostgresStore implements WhatsAppStore {
     count += await deleted("DELETE FROM whatsapp_hold WHERE user_id = $1", [
       userId,
     ]);
+    count += await deleted(
+      "DELETE FROM whatsapp_approval_card WHERE user_id = $1",
+      [userId],
+    );
     count += await deleted("DELETE FROM whatsapp_chat WHERE user_id = $1", [
       userId,
     ]);
@@ -326,6 +435,10 @@ export class PostgresStore implements WhatsAppStore {
         "DELETE FROM whatsapp_message_status WHERE status_at < $1",
         [before(RETENTION.statusMs)],
       ),
+      cards: await deleted(
+        "DELETE FROM whatsapp_approval_card WHERE shown_at < $1",
+        [before(RETENTION.cardMs)],
+      ),
       claims: await deleted(
         "DELETE FROM whatsapp_event_claims WHERE claimed_at < $1",
         [before(RETENTION.claimMs)],
@@ -340,5 +453,333 @@ export class PostgresStore implements WhatsAppStore {
         [before(RETENTION.usageMs).toISOString().slice(0, 13)],
       ),
     };
+  }
+
+  async claimEvent(id: string): Promise<boolean> {
+    const { rowCount } = await this.database.query(
+      `INSERT INTO whatsapp_event_claims (event_id) VALUES ($1)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [id],
+    );
+    return rowCount === 1;
+  }
+
+  async releaseEvent(id: string): Promise<void> {
+    await this.database.query(
+      "DELETE FROM whatsapp_event_claims WHERE event_id = $1",
+      [id],
+    );
+  }
+
+  async saveInstallation(installation: Installation): Promise<void> {
+    await this.database.query(
+      `INSERT INTO whatsapp_installation (${INSTALLATION_COLUMNS})
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       ON CONFLICT (waba_id, phone_number_id) DO UPDATE SET
+         host_uid = EXCLUDED.host_uid,
+         host_key = EXCLUDED.host_key,
+         business_token = EXCLUDED.business_token,
+         pin = EXCLUDED.pin,
+         delivery_secret = EXCLUDED.delivery_secret,
+         organization_uid = EXCLUDED.organization_uid,
+         business_name = EXCLUDED.business_name,
+         support = EXCLUDED.support,
+         state = EXCLUDED.state,
+         removed_at = EXCLUDED.removed_at,
+         installed_at = now(),
+         updated_at = now()`,
+      [
+        installation.wabaId,
+        installation.phoneNumberId,
+        installation.hostUid,
+        JSON.stringify(installation.hostKey),
+        installation.businessToken
+          ? JSON.stringify(installation.businessToken)
+          : null,
+        installation.pin ? JSON.stringify(installation.pin) : null,
+        installation.deliverySecret
+          ? JSON.stringify(installation.deliverySecret)
+          : null,
+        installation.organizationUid,
+        installation.businessName,
+        installation.support,
+        installation.state,
+        installation.removedAt ?? null,
+      ],
+    );
+  }
+
+  async installation(
+    wabaId: string,
+    phoneNumberId: string,
+  ): Promise<Installation | undefined> {
+    const { rows } = await this.database.query<InstallationRow>(
+      `SELECT ${INSTALLATION_COLUMNS} FROM whatsapp_installation
+        WHERE waba_id = $1 AND phone_number_id = $2`,
+      [wabaId, phoneNumberId],
+    );
+    return rows[0] ? installationOf(rows[0]) : undefined;
+  }
+
+  async installationByHost(hostUid: string): Promise<Installation | undefined> {
+    const { rows } = await this.database.query<InstallationRow>(
+      `SELECT ${INSTALLATION_COLUMNS} FROM whatsapp_installation WHERE host_uid = $1`,
+      [hostUid],
+    );
+    return rows[0] ? installationOf(rows[0]) : undefined;
+  }
+
+  async installations(state?: InstallationState): Promise<Installation[]> {
+    const { rows } = await this.database.query<InstallationRow>(
+      `SELECT ${INSTALLATION_COLUMNS} FROM whatsapp_installation
+        WHERE $1::text IS NULL OR state = $1 ORDER BY waba_id, phone_number_id`,
+      [state ?? null],
+    );
+    return rows.map(installationOf);
+  }
+
+  async setInstallationState(
+    wabaId: string,
+    phoneNumberId: string,
+    state: "active" | "paused",
+  ): Promise<boolean> {
+    const { rowCount } = await this.database.query(
+      `UPDATE whatsapp_installation SET state = $3, updated_at = now()
+        WHERE waba_id = $1 AND phone_number_id = $2 AND state <> 'removed'`,
+      [wabaId, phoneNumberId, state],
+    );
+    return rowCount === 1;
+  }
+
+  async removeInstallation(
+    wabaId: string,
+    phoneNumberId: string,
+    at: Date,
+  ): Promise<boolean> {
+    const { rowCount } = await this.database.query(
+      `UPDATE whatsapp_installation SET
+         state = 'removed', removed_at = $3,
+         business_token = NULL, pin = NULL, delivery_secret = NULL,
+         updated_at = now()
+       WHERE waba_id = $1 AND phone_number_id = $2 AND state <> 'removed'`,
+      [wabaId, phoneNumberId, at],
+    );
+    return rowCount === 1;
+  }
+
+  async purgeInstallation(
+    wabaId: string,
+    phoneNumberId: string,
+  ): Promise<number> {
+    const deleted = async (sql: string, values: unknown[]) =>
+      (await this.database.query(sql, values)).rowCount ?? 0;
+    const installation = `${wabaId}:${phoneNumberId}`;
+    let count = 0;
+    for (const table of [
+      "whatsapp_hold",
+      "whatsapp_chat",
+      "whatsapp_approval_card",
+      "whatsapp_message_status",
+      "whatsapp_message_count",
+    ])
+      count += await deleted(
+        `DELETE FROM ${table} WHERE phone_number_id = $1`,
+        [phoneNumberId],
+      );
+    count += await deleted(
+      `DELETE FROM whatsapp_jobs
+        WHERE payload->>'phoneNumberId' = $1 AND state <> 'processing'`,
+      [phoneNumberId],
+    );
+    // The number's and its people's quota counts (`number:` and `user:<installation>:`).
+    count += await deleted(
+      `DELETE FROM whatsapp_usage
+        WHERE usage_key = 'number:' || $1 OR starts_with(usage_key, 'user:' || $1 || ':')`,
+      [installation],
+    );
+    count += await deleted(
+      `DELETE FROM whatsapp_installation WHERE waba_id = $1 AND phone_number_id = $2`,
+      [wabaId, phoneNumberId],
+    );
+    count += await deleted(
+      `DELETE FROM whatsapp_template WHERE waba_id = $1 AND NOT EXISTS (
+         SELECT 1 FROM whatsapp_installation WHERE waba_id = $1)`,
+      [wabaId],
+    );
+    return count;
+  }
+
+  async markDisclosed(key: ChatKey): Promise<boolean> {
+    const { rowCount } = await this.database.query(
+      `UPDATE whatsapp_chat SET disclosed = true, updated_at = now()
+        WHERE phone_number_id = $1 AND user_id = $2 AND NOT disclosed`,
+      [key.phoneNumberId, key.userId],
+    );
+    return rowCount === 1;
+  }
+
+  async claimTurn(
+    key: ChatKey,
+    owner: string,
+    until: Date,
+    now: Date,
+  ): Promise<TurnClaim> {
+    // One statement: of two claims at once, one wins the row.
+    const { rows } = await this.database.query<{
+      turn_owner: string | null;
+      taken: boolean;
+    }>(
+      `WITH taken AS (
+         UPDATE whatsapp_chat SET
+           turn_owner = $3, turn_until = $4, turn_session = NULL,
+           turn_deployment = NULL, turn_stop = false, updated_at = now()
+         WHERE phone_number_id = $1 AND user_id = $2
+           AND (turn_owner IS NULL OR turn_owner = $3 OR turn_until <= $5)
+         RETURNING turn_owner)
+       SELECT turn_owner, true AS taken FROM taken
+       UNION ALL
+       SELECT turn_owner, false AS taken FROM whatsapp_chat
+        WHERE phone_number_id = $1 AND user_id = $2
+          AND NOT EXISTS (SELECT 1 FROM taken)`,
+      [key.phoneNumberId, key.userId, owner, until, now],
+    );
+    const row = rows[0];
+    if (!row) throw new Error("claimTurn names a chat the service never saw.");
+    return row.taken
+      ? { ok: true }
+      : { ok: false, owner: row.turn_owner ?? "" };
+  }
+
+  async renewTurn(key: ChatKey, owner: string, until: Date): Promise<void> {
+    await this.database.query(
+      `UPDATE whatsapp_chat SET turn_until = $4
+        WHERE phone_number_id = $1 AND user_id = $2 AND turn_owner = $3`,
+      [key.phoneNumberId, key.userId, owner, until],
+    );
+  }
+
+  async setTurnSession(
+    key: ChatKey,
+    owner: string,
+    sessionUid: string,
+    deploymentUid: string,
+  ): Promise<void> {
+    await this.database.query(
+      `UPDATE whatsapp_chat SET turn_session = $4, turn_deployment = $5
+        WHERE phone_number_id = $1 AND user_id = $2 AND turn_owner = $3`,
+      [key.phoneNumberId, key.userId, owner, sessionUid, deploymentUid],
+    );
+  }
+
+  async requestStop(key: ChatKey, now: Date): Promise<RunningTurn | undefined> {
+    const { rows } = await this.database.query<ChatRow>(
+      `UPDATE whatsapp_chat SET turn_stop = true
+        WHERE phone_number_id = $1 AND user_id = $2
+          AND turn_owner IS NOT NULL AND turn_until > $3
+        RETURNING ${CHAT_COLUMNS}`,
+      [key.phoneNumberId, key.userId, now],
+    );
+    return rows[0] ? turnOf(rows[0]) : undefined;
+  }
+
+  async releaseTurn(key: ChatKey, owner: string): Promise<void> {
+    await this.database.query(
+      `UPDATE whatsapp_chat SET
+         turn_owner = NULL, turn_until = NULL, turn_session = NULL,
+         turn_deployment = NULL, turn_stop = false
+       WHERE phone_number_id = $1 AND user_id = $2 AND turn_owner = $3`,
+      [key.phoneNumberId, key.userId, owner],
+    );
+  }
+
+  async setSession(
+    key: ChatKey,
+    session: Readonly<{
+      sessionUid: string;
+      deploymentUid: string;
+      unshown: boolean;
+    }>,
+  ): Promise<void> {
+    await this.database.query(
+      `UPDATE whatsapp_chat SET
+         session_uid = $3, session_deployment = $4,
+         unshown_session_uid = CASE WHEN $5 THEN $3 ELSE NULL END,
+         updated_at = now()
+       WHERE phone_number_id = $1 AND user_id = $2`,
+      [
+        key.phoneNumberId,
+        key.userId,
+        session.sessionUid,
+        session.deploymentUid,
+        session.unshown,
+      ],
+    );
+  }
+
+  async markShown(key: ChatKey, sessionUid: string): Promise<boolean> {
+    const { rowCount } = await this.database.query(
+      `UPDATE whatsapp_chat SET unshown_session_uid = NULL
+        WHERE phone_number_id = $1 AND user_id = $2 AND unshown_session_uid = $3`,
+      [key.phoneNumberId, key.userId, sessionUid],
+    );
+    return rowCount === 1;
+  }
+
+  async setAsking(key: ChatKey, asking: Asking | undefined): Promise<void> {
+    await this.database.query(
+      `UPDATE whatsapp_chat SET asking = $3
+        WHERE phone_number_id = $1 AND user_id = $2`,
+      [key.phoneNumberId, key.userId, asking ? JSON.stringify(asking) : null],
+    );
+  }
+
+  async saveCard(card: ApprovalCardRow): Promise<void> {
+    await this.database.query(
+      `INSERT INTO whatsapp_approval_card
+         (phone_number_id, user_id, approval_id, deployment_uid, digest, tool_name, shown_at, decided_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (phone_number_id, user_id, approval_id) DO UPDATE SET
+         deployment_uid = EXCLUDED.deployment_uid, digest = EXCLUDED.digest,
+         tool_name = EXCLUDED.tool_name, shown_at = EXCLUDED.shown_at,
+         decided_status = EXCLUDED.decided_status`,
+      [
+        card.phoneNumberId,
+        card.userId,
+        card.approvalId,
+        card.deploymentUid,
+        card.digest,
+        card.toolName,
+        card.shownAt,
+        card.decidedStatus ?? null,
+      ],
+    );
+  }
+
+  async card(
+    phoneNumberId: string,
+    userId: string,
+    approvalId: string,
+  ): Promise<ApprovalCardRow | undefined> {
+    const { rows } = await this.database.query<CardRow>(
+      `SELECT phone_number_id, user_id, approval_id, deployment_uid, digest,
+              tool_name, shown_at, decided_status
+         FROM whatsapp_approval_card
+        WHERE phone_number_id = $1 AND user_id = $2 AND approval_id = $3`,
+      [phoneNumberId, userId, approvalId],
+    );
+    return rows[0] ? cardOf(rows[0]) : undefined;
+  }
+
+  async decideCard(
+    phoneNumberId: string,
+    userId: string,
+    approvalId: string,
+    status: string,
+  ): Promise<void> {
+    await this.database.query(
+      `UPDATE whatsapp_approval_card SET decided_status = $4
+        WHERE phone_number_id = $1 AND user_id = $2 AND approval_id = $3`,
+      [phoneNumberId, userId, approvalId, status],
+    );
   }
 }

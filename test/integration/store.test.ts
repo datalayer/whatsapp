@@ -228,6 +228,7 @@ describe.runIf(Boolean(DATABASE_URL))(
         [windowOf(at(1, -60 * 60 * 1000)), windowOf(NOW)],
       );
       expect(await store.retain(NOW)).toEqual({
+        cards: 0,
         chats: 0,
         claims: 1,
         deadJobs: 1,

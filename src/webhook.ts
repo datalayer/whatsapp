@@ -355,7 +355,7 @@ export function normalize(body: unknown): Normalized {
 export type WebhookDependencies = Readonly<{
   appSecret: string;
   verifyToken: string;
-  queue: WorkQueue<WhatsAppJob>;
+  queue: Pick<WorkQueue<WhatsAppJob>, "enqueue">;
   store: WhatsAppStore;
   logger: Logger;
 }>;
