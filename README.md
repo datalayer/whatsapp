@@ -15,6 +15,10 @@ A business connects **its own WhatsApp number** to an application it deployed on
 - Every phone number Meta sends is dropped at the ingress: a person is their business-scoped user id (BSUID), never their number.
 - `/healthz` and `/readyz` on every role.
 
+## Security and privacy
+
+`docs/threat-model.md` (what Meta sees, what this service keeps and for how long, each threat with its control and test) and the decisions in `docs/adr/`: Meta's Cloud API directly (0001), the business-scoped user id as the identity with no phone number kept (0002), the 24-hour window and templates without content (0003). Drafts until signed off: no business token is stored before.
+
 ## Settings
 
 | Setting                           | What it is                                                                     |
