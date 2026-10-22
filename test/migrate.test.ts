@@ -40,7 +40,11 @@ describe.runIf(Boolean(DATABASE_URL))("migrate on PostgreSQL", () => {
       ).rows.map((row) => row.table_name);
     const first = await tables();
     expect(first).toEqual(
-      [...hostTables("whatsapp"), "whatsapp_message_status"].sort(),
+      [
+        ...hostTables("whatsapp"),
+        "whatsapp_chat",
+        "whatsapp_message_status",
+      ].sort(),
     );
     migrate();
     expect(await tables()).toEqual(first);

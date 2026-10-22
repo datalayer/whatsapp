@@ -6,7 +6,7 @@
 
 A business connects **its own WhatsApp number** to an application it deployed on Datalayer, and the application answers on that number: the same session, rules, tools, connections, approvals and record as on datalayer.ai. WhatsApp is a host of Datalayer's existing session and approval contracts (the shared host kit in agent-runtimes' `src/portable/hosts`, `kind: "whatsapp"`); it is not a separate agent runtime. The service speaks Meta's WhatsApp Business Platform (Cloud API) directly.
 
-**State:** the webhook ingress only. Install, linking, turns, deliveries and approvals are not built yet; nothing is deployed.
+**State:** the webhook ingress, and the words a person writes (`src/commands.ts`), not yet wired to a worker. Install, turns, deliveries and approvals are not built yet; nothing is deployed.
 
 ## What it does today
 
@@ -14,6 +14,10 @@ A business connects **its own WhatsApp number** to an application it deployed on
 - `POST /whatsapp/webhook` reads the raw body up to 3 MB (413 past it), checks `X-Hub-Signature-256` (the HMAC-SHA256 of the raw body with the Meta app's secret; 401 otherwise), claims each message once by its `wamid` and enqueues it with its claim in one transaction, keeps each sent message's furthest status (`sent`, `delivered`, `read`, `played`, `failed`), hands account events to the worker, and answers 200 at once. A duplicate claims nothing and is answered 200; anything not persisted is answered 500, so that Meta tries again.
 - Every phone number Meta sends is dropped at the ingress: a person is their business-scoped user id (BSUID), never their number.
 - `/healthz` and `/readyz` on every role.
+
+## The words
+
+A person writes one of these alone in a message, in any case: `help` (what answers here, how to reach a person at the business, and these words), `status`, `app` (a list to choose the application, for a linked Datalayer account), `start over`, `stop`, `link` (a one-use button to confirm on datalayer.ai), `unlink`. Inside a sentence, a word is part of the question.
 
 ## Security and privacy
 

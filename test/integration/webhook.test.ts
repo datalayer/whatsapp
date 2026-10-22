@@ -204,10 +204,9 @@ describe("the webhook on a real socket", () => {
 
   it("answers 500 when a status could not be kept", async () => {
     const queue = new RecordingQueue<WhatsAppJob>();
-    const failing: WhatsAppStore = {
+    const failing: WhatsAppStore = Object.assign(new MemoryStore(), {
       applyStatus: () => Promise.reject(new Error("The database is down.")),
-      status: () => Promise.resolve(undefined),
-    };
+    });
     const { post } = await endpoint(queue, failing);
     const body = webhook({
       statuses: [{ id: "wamid.S0", status: "sent", timestamp: "1792670400" }],
