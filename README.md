@@ -6,7 +6,7 @@
 
 A business connects **its own WhatsApp number** to an application it deployed on Datalayer, and the application answers on that number: the same session, rules, tools, connections, approvals and record as on datalayer.ai. WhatsApp is a host of Datalayer's existing session and approval contracts (the shared host kit in agent-runtimes' `src/portable/hosts`, `kind: "whatsapp"`); it is not a separate agent runtime. The service speaks Meta's WhatsApp Business Platform (Cloud API) directly.
 
-**State:** the webhook ingress, the install through Meta's Embedded Signup (`src/install.ts`) and removal (`src/removal.ts`), the worker's 1:1 turn (`src/worker.ts`, Meta behind `src/meta-port.ts`, WhatsApp's forms in `src/render.ts`), the words a person writes (`src/commands.ts`) and the 24-hour window keeper (`src/window.ts`, the notice templates in `templates/`). Nothing is deployed.
+**State:** the webhook ingress, the install through Meta's Embedded Signup (`src/install.ts`) and removal (`src/removal.ts`), the worker's 1:1 turn (`src/worker.ts`, Meta behind `src/meta-port.ts`, WhatsApp's forms in `src/render.ts`), Datalayer's deliveries (`src/deliveries.ts`) and approvals (`src/approvals.ts`), the words a person writes (`src/commands.ts`) and the 24-hour window keeper (`src/window.ts`, the notice templates in `templates/`). Nothing is deployed.
 
 ## What it does today
 
@@ -36,6 +36,14 @@ A linked person writes to the number; the worker:
 - asks the question a turn ends on as reply buttons (three short options), a list (ten) or words.
 
 An answer holding anything shaped like a credential is never written in the chat (a message rests at Meta for 30 days): the person gets **Open in Datalayer** only. A turn that outlives the window ends with a notice, and the answer comes with the person's reply. A person without a link is told once a day how to link; a paused number says so once a day.
+
+## Deliveries and approvals
+
+Datalayer pushes what happens after a turn to `POST /datalayer/deliveries/{host}`, signed with the installation's delivery secret (the hosts kit's route: five minutes at most, each delivery queued once by its id); the worker also reads every number's outbox, for what a push missed. A delivery reaches the person's chat through the window keeper: inside the 24-hour window at once, outside it held by reference with one notice, and shown when the person replies. A removed number's deliveries are left unacknowledged and unshown.
+
+An approval that waits on a linked person is one card in their chat, at most 1,024 characters: the application, the action, every material value whole, its age; **Approve**, **Reject**, **Show more**. A press answers a second message naming the action again, **Yes** or **No**; **Yes** decides at Datalayer as the person, on exactly what the card showed, once. A request that changed since its card answers *This changed — see the new request* and the new card; a decided, expired or someone else's request is said so; there is no edit, so each outcome is a new message. Anything a host may not decide (today everything but mail), or that does not fit, is **Review in Datalayer** only, a one-use link for the person. A personal agent's operation at a company (PAP) shows its exact revision.
+
+A personal agent's sign-in at a company is rendered as a button to the company's page through Datalayer (or the code and the page to enter it): never a token.
 
 ## The words
 

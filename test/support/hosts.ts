@@ -2,6 +2,7 @@ import {
   HostRefusedError,
   type BoundHost,
   type DatalayerHostClient,
+  type HostDelivery,
   type HostSelf,
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
 
@@ -24,6 +25,7 @@ export class FakeHosts
       | "uninstalled"
       | "bind"
       | "setWebhook"
+      | "outbox"
     >
 {
   readonly calls: string[] = [];
@@ -36,6 +38,8 @@ export class FakeHosts
   readonly binds: Array<{ code: string; externalId: string; name?: string }> =
     [];
   readonly webhooks: string[] = [];
+  /** What each key's outbox holds. */
+  readonly outboxes = new Map<string, HostDelivery[]>();
   codes = 0;
   self_: HostSelf = {
     accountUid: "account-1",
@@ -94,6 +98,11 @@ export class FakeHosts
   async acknowledge(hostKey: string, deliveryUid: string): Promise<void> {
     this.#key(hostKey);
     this.acknowledged.push(deliveryUid);
+  }
+
+  async outbox(hostKey: string): Promise<HostDelivery[]> {
+    this.#key(hostKey);
+    return this.outboxes.get(hostKey) ?? [];
   }
 
   async uninstalled(hostKey: string): Promise<void> {
