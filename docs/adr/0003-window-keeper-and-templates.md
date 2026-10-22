@@ -1,7 +1,6 @@
 # ADR 0003: the 24-hour window kept by design; three utility templates without content
 
-Status: proposed, 22 October 2026; accepted with the threat model's
-sign-off.
+Status: accepted, 22 October 2026, with the threat model's sign-off.
 
 ## Context
 

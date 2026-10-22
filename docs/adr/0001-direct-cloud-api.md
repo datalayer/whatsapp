@@ -1,7 +1,6 @@
 # ADR 0001: Meta's Cloud API directly, as a Tech Provider
 
-Status: proposed, 22 October 2026; accepted with the threat model's
-sign-off.
+Status: accepted, 22 October 2026, with the threat model's sign-off.
 
 ## Context
 

@@ -1,8 +1,7 @@
 # Threat model
 
-Status: **draft, 22 October 2026, not signed off.** No business token is
-stored, and no number is connected, before the security and privacy owner
-signs this document off; the sign-off is dated here when it is given.
+Status: **signed off on 22 October 2026** by the security and privacy owner.
+Business tokens may be stored from that date, under the controls below.
 
 The service is a host of Datalayer's existing sessions and approvals on a
 business's own WhatsApp number. It holds no model, no tool and no credential
@@ -82,7 +81,7 @@ it is not built yet.
 | T3  | Oversized or malformed body                  | 3 MB cap while reading (413), Meta's shape parsed strictly (400)                                                                                                                     | `src/verify.ts`, `src/webhook.ts`                                   | `test/integration/webhook.test.ts`                                     | built                                                                                                                                                                     |
 | T4  | Endpoint verification abused                 | `hub.challenge` echoed only for `hub.mode=subscribe` and the verify token (≥ 16 characters, constant time)                                                                           | `src/webhook.ts`                                                    | `test/integration/webhook.test.ts`                                     | built                                                                                                                                                                     |
 | T5  | Phone numbers leaking                        | Dropped by field name at the ingress before anything is kept; message ids kept as hashes; logs scrub phone-number and BSUID shapes                                                   | `src/webhook.ts`, `src/observability.ts`                            | `test/webhook.test.ts`, `test/observability.test.ts`                   | built                                                                                                                                                                     |
-| T6  | Stolen business token                        | Encrypted at rest, scoped to one business account, never logged or traced; rotated by re-running Embedded Signup; a 190 on use ends the installation                                 | `src/install.ts`, `src/removal.ts`, hosts `SecretCipher`            | `test/integration/install.test.ts`, `test/integration/removal.test.ts` | built; no business token is stored before the sign-off                                                                                                                    |
+| T6  | Stolen business token                        | Encrypted at rest, scoped to one business account, never logged or traced; rotated by re-running Embedded Signup; a 190 on use ends the installation                                 | `src/install.ts`, `src/removal.ts`, hosts `SecretCipher`            | `test/integration/install.test.ts`, `test/integration/removal.test.ts` | built; business tokens stored only after the sign-off (22 October 2026)                                                                                                                    |
 | T7  | Embedded Signup substitution                 | The one-use bind code from the owner's Ship card; the code exchanged server-side with the app secret; the business account and number read from Meta, not from the browser           | `src/install.ts`                                                    | `test/integration/install.test.ts`                                     | built                                                                                                                                                                     |
 | T8  | A number ported or recycled                  | Meta's `user_changed_number` and `user_changed_user_id`; the link re-confirmed on the web; the BSUID is per portfolio and regenerated on a number change                             | —                                                                   | —                                                                      | not built yet                                                                                                                                                             |
 | T9  | A phone in the wrong hands                   | Two-step approvals; mail only from the chat; _Review in Datalayer_ beyond; standing permissions never from the chat; `unlink` and `forget` from the chat                             | `src/approvals.ts`, `src/render.ts`, hosts `renderApproval`         | `test/integration/approvals.test.ts`, `test/render.test.ts`            | partly built: two-step approvals, mail only, _Review in Datalayer_ beyond; the `lock` word is not built                                                                   |
@@ -115,7 +114,7 @@ it is not built yet.
   provider; there is no shared Datalayer number offering general-purpose
   assistance (Meta's terms for AI providers, effective 15 January 2026).
 
-## To be decided at sign-off
+## Accepted at sign-off, to be met before a pilot
 
 - That Datalayer's model-provider agreements forbid use of WhatsApp content
   for the providers' own purposes, training included.

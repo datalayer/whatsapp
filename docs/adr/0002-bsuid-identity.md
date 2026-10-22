@@ -1,7 +1,6 @@
 # ADR 0002: the business-scoped user id is the identity; no phone number is kept
 
-Status: proposed, 22 October 2026; accepted with the threat model's
-sign-off.
+Status: accepted, 22 October 2026, with the threat model's sign-off.
 
 ## Context
 
