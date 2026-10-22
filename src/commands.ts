@@ -10,7 +10,7 @@ import type { WindowKeeper } from "./window.js";
 
 /**
  * The words a person writes to the number, alone in a message: `help`,
- * `status`, `app`, `start over`, `stop`, `link`, `unlink`. A word is the
+ * `status`, `app`, `start over`, `stop`, `link`, `unlink`, `forget`. A word is the
  * whole message, any case, any spacing around and between its words; inside
  * a sentence it is the sentence, and goes to the application. Each word
  * answers with what it did, or why it did nothing (no silent degradation).
@@ -28,6 +28,7 @@ export const WORDS = [
   "stop",
   "link",
   "unlink",
+  "forget",
 ] as const;
 export type Word = (typeof WORDS)[number];
 
@@ -146,6 +147,7 @@ const HELP: Readonly<Record<Word, string>> = {
   stop: "stop the running answer; with none, no more notices",
   link: "link your Datalayer account",
   unlink: "unlink it",
+  forget: "unlink, and delete everything this number keeps of you",
 };
 
 const installationOf = (context: CommandContext): string =>
@@ -288,6 +290,24 @@ export async function runWord(
           text: `Link your Datalayer account: sign in to Datalayer, check what it shows and confirm. The link works once, for ${minutes} minutes.`,
           url: `${dependencies.webUrl.replace(/\/+$/, "")}/hosts/link?code=${encodeURIComponent(code.code)}`,
         },
+      ];
+    }
+    case "forget": {
+      // Unlinked at Datalayer whatever the standing (a link made elsewhere
+      // ends too), then every row naming the person here deleted.
+      const revoked = await hosts.unlink(context.hostKey, context.chat.userId);
+      if (revoked)
+        logger.audit("identity.unlinked", {
+          installation: installationOf(context),
+          reason: "forget",
+          user: context.chat.userId,
+        });
+      const deleted = await store.forget(context.chat.userId);
+      logger.info("person.forgotten", { rows: deleted });
+      return [
+        text(
+          `Done: ${revoked ? "your Datalayer account is unlinked from this number, and " : ""}${deleted} record${deleted === 1 ? "" : "s"} naming you here ${deleted === 1 ? "is" : "are"} deleted. Your conversations stay in Datalayer under its record retention: delete them there. Meta keeps its own copy of the messages for up to 30 days.`,
+        ),
       ];
     }
     case "unlink": {

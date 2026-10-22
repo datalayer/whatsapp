@@ -12,6 +12,7 @@ import {
   type MessageStatus,
   type StatusUpdate,
   type WhatsAppStore,
+  wamidHash,
 } from "./store.js";
 import {
   BodyTooLargeError,
@@ -327,7 +328,9 @@ export function normalize(body: unknown): Normalized {
             message,
             value.contacts,
           );
-          if (job) out.jobs.push({ job, key: `message:${job.wamid}` });
+          // Claimed by the id's hash: the id may embed a phone number.
+          if (job)
+            out.jobs.push({ job, key: `message:${wamidHash(job.wamid)}` });
           else out.ignored.push("message_without_user_id");
         }
         for (const status of value.statuses ?? []) {

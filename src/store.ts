@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /**
  * What the service keeps, behind one interface: PostgreSQL in production
  * (`postgres-store.ts`), memory in development and tests. Each later piece
@@ -38,8 +40,16 @@ export type StatusUpdate = Readonly<{
   errorCode?: number;
 }>;
 
+/**
+ * A message id as kept: its SHA-256. Meta's message ids have been seen to
+ * embed the sender's or recipient's phone number, so a claim or a status
+ * keeps the hash, never the id.
+ */
+export const wamidHash = (wamid: string): string =>
+  createHash("sha256").update(wamid).digest("hex");
+
+/** A sent message's furthest status, found by its id; the id itself is not kept. */
 export type StatusRow = Readonly<{
-  wamid: string;
   phoneNumberId: string;
   status: MessageStatus;
   at: Date;
@@ -81,6 +91,23 @@ export type TemplateRow = Readonly<{
 
 /** What a number sent: free-form service messages, and utility templates. */
 export type MessageCategory = "service" | "utility";
+
+/** How long each kind of row is kept (`retain`). */
+export const RETENTION = {
+  /** A chat and what it holds: 30 days after the person's last message. */
+  chatMs: 30 * 24 * 60 * 60 * 1000,
+  /** A sent message's status. */
+  statusMs: 30 * 24 * 60 * 60 * 1000,
+  /** A claim: Meta retries a webhook for 7 days, so a day more. */
+  claimMs: 8 * 24 * 60 * 60 * 1000,
+  /** A job that failed five times. */
+  deadJobMs: 14 * 24 * 60 * 60 * 1000,
+  /** Quota counts, which name a person: their hour, and a day. */
+  usageMs: 24 * 60 * 60 * 1000,
+} as const;
+
+/** What `retain` deleted, by table. */
+export type Retained = Record<string, number>;
 
 export interface WhatsAppStore {
   /** Keep a message's furthest status; idempotent, and never a step back. */
@@ -129,6 +156,15 @@ export interface WhatsAppStore {
     phoneNumberId: string,
     month: string,
   ): Promise<Record<MessageCategory, number>>;
+  /**
+   * `forget`: every row naming the person (their BSUID) deleted, on every
+   * number of the business — their chats, what those hold, their queued
+   * and dead jobs (the one running now is deleted when it ends), their
+   * quota counts. Claims and statuses never name them. Answers how many rows.
+   */
+  forget(userId: string): Promise<number>;
+  /** Delete what is past its keeping (`RETENTION`), as of `now`. */
+  retain(now: Date): Promise<Retained>;
 }
 
 const chatKeyOf = (key: ChatKey): string =>
@@ -143,13 +179,12 @@ export class MemoryStore implements WhatsAppStore {
   readonly #counts = new Map<string, number>();
 
   async applyStatus(update: StatusUpdate): Promise<void> {
-    const kept = this.#statuses.get(update.wamid);
+    const kept = this.#statuses.get(wamidHash(update.wamid));
     if (kept && STATUS_RANK[kept.status] >= STATUS_RANK[update.status]) return;
-    this.#statuses.set(update.wamid, {
+    this.#statuses.set(wamidHash(update.wamid), {
       at: update.at,
       phoneNumberId: update.phoneNumberId,
       status: update.status,
-      wamid: update.wamid,
       ...(update.errorCode !== undefined
         ? { errorCode: update.errorCode }
         : {}),
@@ -157,7 +192,7 @@ export class MemoryStore implements WhatsAppStore {
   }
 
   async status(wamid: string): Promise<StatusRow | undefined> {
-    return this.#statuses.get(wamid);
+    return this.#statuses.get(wamidHash(wamid));
   }
 
   async recordInbound(
@@ -282,5 +317,46 @@ export class MemoryStore implements WhatsAppStore {
     const of = (category: MessageCategory) =>
       this.#counts.get(JSON.stringify([phoneNumberId, month, category])) ?? 0;
     return { service: of("service"), utility: of("utility") };
+  }
+
+  async forget(userId: string): Promise<number> {
+    let count = 0;
+    for (const [key, chat] of this.#chats)
+      if (chat.userId === userId) {
+        this.#chats.delete(key);
+        count += 1;
+      }
+    for (const [key, held] of this.#holds)
+      if (held[0]?.userId === userId) {
+        this.#holds.delete(key);
+        count += held.length;
+      }
+    return count;
+  }
+
+  async retain(now: Date): Promise<Retained> {
+    const before = (ms: number) => now.getTime() - ms;
+    const out: Retained = { chats: 0, holds: 0, statuses: 0 };
+    for (const [key, chat] of this.#chats)
+      if (chat.lastInboundAt.getTime() < before(RETENTION.chatMs)) {
+        this.#chats.delete(key);
+        out.chats = (out.chats ?? 0) + 1;
+        out.holds = (out.holds ?? 0) + (this.#holds.get(key)?.length ?? 0);
+        this.#holds.delete(key);
+      }
+    for (const [key, held] of this.#holds) {
+      const kept = held.filter(
+        (one) => one.heldAt.getTime() >= before(RETENTION.chatMs),
+      );
+      out.holds = (out.holds ?? 0) + held.length - kept.length;
+      if (kept.length) this.#holds.set(key, kept);
+      else this.#holds.delete(key);
+    }
+    for (const [key, status] of this.#statuses)
+      if (status.at.getTime() < before(RETENTION.statusMs)) {
+        this.#statuses.delete(key);
+        out.statuses = (out.statuses ?? 0) + 1;
+      }
+    return out;
   }
 }

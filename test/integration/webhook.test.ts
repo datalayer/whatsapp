@@ -5,7 +5,7 @@ import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { PostgresStore } from "../../src/postgres-store.js";
-import { MemoryStore, type WhatsAppStore } from "../../src/store.js";
+import { MemoryStore, wamidHash, type WhatsAppStore } from "../../src/store.js";
 import { BODY_LIMIT } from "../../src/verify.js";
 import {
   webhookRoutes,
@@ -114,7 +114,7 @@ describe("the webhook on a real socket", () => {
           wabaId: WABA,
           wamid: "wamid.A1",
         },
-        key: "message:wamid.A1",
+        key: `message:${wamidHash("wamid.A1")}`,
       },
     ]);
     const kept = JSON.stringify(queue.items) + lines.join("\n");
@@ -144,7 +144,9 @@ describe("the webhook on a real socket", () => {
     expect((await post(body)).status).toBe(200);
     expect((await post(body)).status).toBe(200);
     expect((await post(body)).status).toBe(200);
-    expect(queue.items.map(({ key }) => key)).toEqual(["message:wamid.R1"]);
+    expect(queue.items.map(({ key }) => key)).toEqual([
+      `message:${wamidHash("wamid.R1")}`,
+    ]);
   });
 
   it("claims only the new message of a duplicate batch", async () => {
@@ -161,8 +163,8 @@ describe("the webhook on a real socket", () => {
     });
     expect((await post(batch)).status).toBe(200);
     expect(queue.items.map(({ key }) => key)).toEqual([
-      "message:wamid.D1",
-      "message:wamid.D2",
+      `message:${wamidHash("wamid.D1")}`,
+      `message:${wamidHash("wamid.D2")}`,
     ]);
     expect(JSON.parse(lines.at(-1) ?? "{}")).toMatchObject({
       claimed: 1,
@@ -186,7 +188,9 @@ describe("the webhook on a real socket", () => {
     });
     expect(Buffer.byteLength(under)).toBeLessThanOrEqual(BODY_LIMIT);
     expect((await post(under)).status).toBe(200);
-    expect(queue.items.map(({ key }) => key)).toEqual(["message:wamid.O2"]);
+    expect(queue.items.map(({ key }) => key)).toEqual([
+      `message:${wamidHash("wamid.O2")}`,
+    ]);
   });
 
   it("answers 500 when nothing could be persisted, and takes Meta's retry once", async () => {
@@ -199,7 +203,9 @@ describe("the webhook on a real socket", () => {
     expect(lines.join("\n")).toContain("webhook.not_persisted");
     expect((await post(body)).status).toBe(200);
     expect((await post(body)).status).toBe(200);
-    expect(queue.items.map(({ key }) => key)).toEqual(["message:wamid.U1"]);
+    expect(queue.items.map(({ key }) => key)).toEqual([
+      `message:${wamidHash("wamid.U1")}`,
+    ]);
   });
 
   it("answers 500 when a status could not be kept", async () => {
@@ -359,9 +365,12 @@ describe.runIf(Boolean(DATABASE_URL))("the webhook on PostgreSQL", () => {
       "SELECT event_id FROM whatsapp_event_claims ORDER BY event_id",
     );
     expect(claims.rows.map(({ event_id }) => event_id)).toEqual([
-      "ingress:message:wamid.P1",
-      "ingress:message:wamid.P2",
+      ...[
+        `ingress:message:${wamidHash("wamid.P1")}`,
+        `ingress:message:${wamidHash("wamid.P2")}`,
+      ].sort(),
     ]);
+    expect(JSON.stringify(claims.rows)).not.toContain("wamid.");
     for (const [status, timestamp] of [
       ["read", "1792670403"],
       ["delivered", "1792670402"],

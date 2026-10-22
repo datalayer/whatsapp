@@ -17,11 +17,15 @@ A business connects **its own WhatsApp number** to an application it deployed on
 
 ## The words
 
-A person writes one of these alone in a message, in any case: `help` (what answers here, how to reach a person at the business, and these words), `status`, `app` (a list to choose the application, for a linked Datalayer account), `start over`, `stop`, `link` (a one-use button to confirm on datalayer.ai), `unlink`. Inside a sentence, a word is part of the question.
+A person writes one of these alone in a message, in any case: `help` (what answers here, how to reach a person at the business, and these words), `status`, `app` (a list to choose the application, for a linked Datalayer account), `start over`, `stop`, `link` (a one-use button to confirm on datalayer.ai), `unlink`, `forget` (unlinked, and every row naming the person deleted at once). Inside a sentence, a word is part of the question.
 
 ## The 24-hour window
 
 WhatsApp lets a business say anything for 24 hours after the person's last message; after that, only an approved template. The window keeper holds what comes later (an answer, an approval) by reference, sends at most one notice per person per 24 hours (`templates/`: three utility templates naming the application only, created in the business's account at install), and gives back what was held when the person replies. `stop`, with no answer running, ends notices to that person; a template Meta rejects or recategorizes pauses every notice of the account. The messages sent per number and month are counted against Meta's free tier of service messages.
+
+## Retention
+
+Every hour the worker deletes chats and what they hold 30 days after the person's last message, message statuses after 30 days, claims after 8 days (Meta retries a webhook for 7), dead jobs after 14 days and quota counts after a day. Message ids are kept only as their SHA-256 (they may embed a phone number). `forget` deletes every row naming the person at once.
 
 ## Security and privacy
 

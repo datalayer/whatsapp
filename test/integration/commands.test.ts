@@ -289,4 +289,30 @@ describe.each(storeCases())("the words on $name", ({ store }) => {
       expect(hosts.calls).toEqual([]);
     }
   });
+
+  it("forget: unlinked at Datalayer and every row naming the person deleted, for anyone", async () => {
+    const linked = await setup("linked");
+    linked.hosts.links.add(ALICE);
+    await linked.store.hold(chat, "delivery", "dl-1", new Date());
+    await linked.store.recordInbound(
+      { ...chat, phoneNumberId: "another-number" },
+      new Date(),
+    );
+    const said = textOf(await linked.run("forget"));
+    expect(said).toBe(
+      "Done: your Datalayer account is unlinked from this number, and 3 records naming you here are deleted. Your conversations stay in Datalayer under its record retention: delete them there. Meta keeps its own copy of the messages for up to 30 days.",
+    );
+    expect(linked.hosts.calls).toEqual([
+      `unlink:dlhk_test-only-host-key:${ALICE}`,
+    ]);
+    expect(await linked.store.chat(chat)).toBeUndefined();
+    expect(await linked.store.holds(chat)).toEqual([]);
+    expect(linked.lines.join("\n")).not.toContain(ALICE);
+
+    const visitor = await setup("visitor");
+    expect(textOf(await visitor.run("forget"))).toMatch(
+      /^Done: 1 record naming you here is deleted\./,
+    );
+    expect(await visitor.store.chat(chat)).toBeUndefined();
+  });
 });

@@ -8,10 +8,13 @@ import {
   type HoldKind,
   type MessageCategory,
   type MessageStatus,
+  type Retained,
+  RETENTION,
   type TemplateRow,
   type StatusRow,
   type StatusUpdate,
   type WhatsAppStore,
+  wamidHash,
 } from "./store.js";
 
 type ChatRow = {
@@ -61,9 +64,9 @@ export class PostgresStore implements WhatsAppStore {
     // One statement: a concurrent, lower status loses to the row's rank.
     await this.database.query(
       `INSERT INTO whatsapp_message_status
-         (wamid, phone_number_id, status, status_rank, error_code, status_at)
+         (wamid_hash, phone_number_id, status, status_rank, error_code, status_at)
        VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (wamid) DO UPDATE SET
+       ON CONFLICT (wamid_hash) DO UPDATE SET
          status = EXCLUDED.status,
          status_rank = EXCLUDED.status_rank,
          error_code = EXCLUDED.error_code,
@@ -71,7 +74,7 @@ export class PostgresStore implements WhatsAppStore {
          updated_at = now()
        WHERE whatsapp_message_status.status_rank < EXCLUDED.status_rank`,
       [
-        update.wamid,
+        wamidHash(update.wamid),
         update.phoneNumberId,
         update.status,
         STATUS_RANK[update.status],
@@ -83,15 +86,14 @@ export class PostgresStore implements WhatsAppStore {
 
   async status(wamid: string): Promise<StatusRow | undefined> {
     const { rows } = await this.database.query<{
-      wamid: string;
       phone_number_id: string;
       status: MessageStatus;
       error_code: number | null;
       status_at: Date;
     }>(
-      `SELECT wamid, phone_number_id, status, error_code, status_at
-         FROM whatsapp_message_status WHERE wamid = $1`,
-      [wamid],
+      `SELECT phone_number_id, status, error_code, status_at
+         FROM whatsapp_message_status WHERE wamid_hash = $1`,
+      [wamidHash(wamid)],
     );
     const row = rows[0];
     if (!row) return undefined;
@@ -99,7 +101,6 @@ export class PostgresStore implements WhatsAppStore {
       at: row.status_at,
       phoneNumberId: row.phone_number_id,
       status: row.status,
-      wamid: row.wamid,
       ...(row.error_code !== null ? { errorCode: row.error_code } : {}),
     };
   }
@@ -274,5 +275,70 @@ export class PostgresStore implements WhatsAppStore {
     const of = (category: MessageCategory) =>
       rows.find((row) => row.category === category)?.sent ?? 0;
     return { service: of("service"), utility: of("utility") };
+  }
+
+  async forget(userId: string): Promise<number> {
+    const deleted = async (sql: string, values: unknown[]) =>
+      (await this.database.query(sql, values)).rowCount ?? 0;
+    let count = 0;
+    count += await deleted("DELETE FROM whatsapp_hold WHERE user_id = $1", [
+      userId,
+    ]);
+    count += await deleted("DELETE FROM whatsapp_chat WHERE user_id = $1", [
+      userId,
+    ]);
+    // Their queued and dead jobs; the one being worked (this `forget` among
+    // them) is deleted by the queue when it ends.
+    count += await deleted(
+      `DELETE FROM whatsapp_jobs
+        WHERE payload->>'kind' = 'message' AND payload->>'userId' = $1
+          AND state <> 'processing'`,
+      [userId],
+    );
+    // Their quota counts on every number (`userQuotaKey`: user:<installation>:<BSUID>).
+    count += await deleted(
+      `DELETE FROM whatsapp_usage
+        WHERE starts_with(usage_key, 'user:')
+          AND right(usage_key, length($1) + 1) = ':' || $1`,
+      [userId],
+    );
+    return count;
+  }
+
+  async retain(now: Date): Promise<Retained> {
+    const before = (ms: number) => new Date(now.getTime() - ms);
+    const deleted = async (sql: string, values: unknown[]) =>
+      (await this.database.query(sql, values)).rowCount ?? 0;
+    const cut = before(RETENTION.chatMs);
+    return {
+      holds: await deleted(
+        `DELETE FROM whatsapp_hold h WHERE h.held_at < $1 OR EXISTS (
+           SELECT 1 FROM whatsapp_chat c
+            WHERE c.phone_number_id = h.phone_number_id AND c.user_id = h.user_id
+              AND c.last_inbound_at < $1)`,
+        [cut],
+      ),
+      chats: await deleted(
+        "DELETE FROM whatsapp_chat WHERE last_inbound_at < $1",
+        [cut],
+      ),
+      statuses: await deleted(
+        "DELETE FROM whatsapp_message_status WHERE status_at < $1",
+        [before(RETENTION.statusMs)],
+      ),
+      claims: await deleted(
+        "DELETE FROM whatsapp_event_claims WHERE claimed_at < $1",
+        [before(RETENTION.claimMs)],
+      ),
+      deadJobs: await deleted(
+        "DELETE FROM whatsapp_jobs WHERE state = 'dead' AND created_at < $1",
+        [before(RETENTION.deadJobMs)],
+      ),
+      // The kit's hourly windows (`windowOf`: the ISO hour) sort as text.
+      usage: await deleted(
+        "DELETE FROM whatsapp_usage WHERE usage_window < $1",
+        [before(RETENTION.usageMs).toISOString().slice(0, 13)],
+      ),
+    };
   }
 }

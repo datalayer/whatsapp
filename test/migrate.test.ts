@@ -5,6 +5,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PostgresStore } from "../src/postgres-store.js";
+import { wamidHash } from "../src/store.js";
 
 /**
  * The migrations on a throwaway PostgreSQL
@@ -72,8 +73,12 @@ describe.runIf(Boolean(DATABASE_URL))("migrate on PostgreSQL", () => {
       at,
       phoneNumberId: "1",
       status: "read",
-      wamid: "wamid.M1",
     });
+    // The id is kept as its hash only.
+    const { rows } = await database.query<{ wamid_hash: string }>(
+      "SELECT wamid_hash FROM whatsapp_message_status",
+    );
+    expect(rows).toEqual([{ wamid_hash: wamidHash("wamid.M1") }]);
     await store.applyStatus({
       at,
       errorCode: 131026,

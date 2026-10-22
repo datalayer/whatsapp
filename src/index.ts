@@ -48,12 +48,31 @@ async function handle(job: WhatsAppJob): Promise<void> {
   throw new Error(`No handler for a ${job.kind} job yet.`);
 }
 
-if (role === "worker" || role === "all") queue.start(handle);
+/**
+ * Retention, hourly, on the worker: chats and holds 30 days after the
+ * person's last message, statuses after 30 days, claims after 8, dead jobs
+ * after 14, quota counts after a day (`RETENTION`).
+ */
+const RETENTION_INTERVAL_MS = 60 * 60 * 1000;
+const retain = (): void => {
+  store.retain(new Date()).then(
+    (deleted) => logger.info("retention.done", deleted),
+    (error: unknown) => logger.error("retention.failed", { error }),
+  );
+};
+let retention: NodeJS.Timeout | undefined;
+if (role === "worker" || role === "all") {
+  queue.start(handle);
+  retain();
+  retention = setInterval(retain, RETENTION_INTERVAL_MS);
+  retention.unref();
+}
 
 let closing = false;
 const close = async (): Promise<void> => {
   if (closing) return;
   closing = true;
+  clearInterval(retention);
   server.close();
   await resources.close();
   logger.info("service.stopped", { role });
