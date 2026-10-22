@@ -13,6 +13,7 @@ import { httpAsPerson } from "./as-person.js";
 import { readConfig } from "./config.js";
 import { deliverySinkOf } from "./deliveries.js";
 import { whatsappShape, type WhatsAppTurn } from "./domain.js";
+import { installRoutes } from "./install.js";
 import { HttpMetaPort } from "./meta-port.js";
 import { Metrics, WhatsAppLogger } from "./observability.js";
 import { purgeRemoved, reconcile } from "./removal.js";
@@ -25,7 +26,7 @@ import { Worker } from "./worker.js";
 
 /**
  * Datalayer for WhatsApp: one process per role. Every role serves its
- * health; the ingress serves Meta's webhook and Datalayer's
+ * health; the ingress serves Meta's webhook, the install and Datalayer's
  * signed deliveries, persisting before it answers; the worker works the
  * durable queue: turns, words, approvals, deliveries, account events, the
  * outbox, removals and retention.
@@ -89,6 +90,16 @@ const routes: Routes =
           queue,
           store,
           verifyToken: config.DATALAYER_WHATSAPP_VERIFY_TOKEN,
+        }),
+        ...installRoutes({
+          appUrl: config.DATALAYER_WHATSAPP_APP_URL,
+          cipher,
+          hosts,
+          logger,
+          port,
+          store,
+          webUrl: config.DATALAYER_WEB_URL,
+          window,
         }),
         [`POST ${DELIVERY_ROUTE}`]: deliveryRoute(
           deliverySinkOf(store, cipher),

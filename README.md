@@ -6,7 +6,7 @@
 
 A business connects **its own WhatsApp number** to an application it deployed on Datalayer, and the application answers on that number: the same session, rules, tools, connections, approvals and record as on datalayer.ai. WhatsApp is a host of Datalayer's existing session and approval contracts (the shared host kit in agent-runtimes' `src/portable/hosts`, `kind: "whatsapp"`); it is not a separate agent runtime. The service speaks Meta's WhatsApp Business Platform (Cloud API) directly.
 
-**State:** the webhook ingress, the worker's 1:1 turn (`src/worker.ts`, Meta behind `src/meta-port.ts`, WhatsApp's forms in `src/render.ts`), the words a person writes (`src/commands.ts`) and the 24-hour window keeper (`src/window.ts`, the notice templates in `templates/`). Nothing is deployed.
+**State:** the webhook ingress, the install through Meta's Embedded Signup (`src/install.ts`) and removal (`src/removal.ts`), the worker's 1:1 turn (`src/worker.ts`, Meta behind `src/meta-port.ts`, WhatsApp's forms in `src/render.ts`), the words a person writes (`src/commands.ts`) and the 24-hour window keeper (`src/window.ts`, the notice templates in `templates/`). Nothing is deployed.
 
 ## What it does today
 
@@ -14,6 +14,14 @@ A business connects **its own WhatsApp number** to an application it deployed on
 - `POST /whatsapp/webhook` reads the raw body up to 3 MB (413 past it), checks `X-Hub-Signature-256` (the HMAC-SHA256 of the raw body with the Meta app's secret; 401 otherwise), claims each message once by its `wamid` and enqueues it with its claim in one transaction, keeps each sent message's furthest status (`sent`, `delivered`, `read`, `played`, `failed`), hands account events to the worker, and answers 200 at once. A duplicate claims nothing and is answered 200; anything not persisted is answered 500, so that Meta tries again.
 - Every phone number Meta sends is dropped at the ingress: a person is their business-scoped user id (BSUID), never their number.
 - `/healthz` and `/readyz` on every role.
+
+## Connect a number
+
+The owner connects a number from the application's **Ship → WhatsApp** card in Datalayer: the card makes the pending installation at Datalayer (a one-use bind code) and runs Meta's Embedded Signup, then posts the business account, the number's id, Meta's code and the bind code to `POST /whatsapp/install` (from Datalayer's web origin only). The service exchanges the code for the business token server to server, checks the number is the account's, subscribes Datalayer's app to the account's webhooks, registers the number with a PIN it makes, creates the three notice templates, binds the installation at Datalayer as `<waba_id>:<phone_number_id>`, registers where Datalayer pushes its deliveries, and keeps the host key, the business token, the PIN and the delivery secret encrypted (AES-256-GCM, each bound to its installation). A spent or expired bind code, or any refusal by Meta, keeps nothing; connecting the same number again replaces its installation. No business token is stored in production before the threat model is signed off.
+
+## Disconnect
+
+A number stops being answered when its owner disconnects it in Datalayer (its key is then refused: found on use, and by a daily reconciliation), when the business removes Datalayer at Meta (`account_update`), or when Meta refuses the business token (190). It is then removed once: the business token and PIN destroyed at once, the installation ended at Datalayer, the app taken off the business account's webhooks when no other number of it is kept; late messages, deliveries and presses do nothing, and every row of the number is purged 24 hours later. The number stays the business's.
 
 ## A question in a chat
 
