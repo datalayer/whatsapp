@@ -12,6 +12,7 @@ import {
   type Reply,
   type Standing,
 } from "../../src/commands.js";
+import { WindowKeeper } from "../../src/window.js";
 import { FakeHosts } from "../support/hosts.js";
 import {
   ALICE,
@@ -73,6 +74,7 @@ describe.each(storeCases())("the words on $name", ({ store }) => {
       hosts,
       logger,
       store: kept,
+      window: new WindowKeeper(kept, { now: () => Date.UTC(2026, 9, 22, 13) }),
       webUrl: "https://datalayer.example/",
     };
     return {
@@ -233,8 +235,16 @@ describe.each(storeCases())("the words on $name", ({ store }) => {
     });
     expect(textOf(await busy.run("stop"))).toBe(SAY.stopped);
     expect(stops).toBe(1);
+    expect((await busy.store.chat(chat))?.noticesStopped).toBe(false);
+  });
+
+  it("stop with nothing running: no more notices, said in status", async () => {
     const idle = await setup("linked");
-    expect(textOf(await idle.run("stop"))).toBe(SAY.nothingRunning);
+    expect(textOf(await idle.run("stop"))).toBe(SAY.noticesStopped);
+    expect((await idle.store.chat(chat))?.noticesStopped).toBe(true);
+    expect(textOf(await idle.run("status"))).toContain(
+      "No notices after a day of silence",
+    );
   });
 
   it("link: a one-use code as a button to Datalayer, for anyone not linked", async () => {

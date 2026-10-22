@@ -1,0 +1,23 @@
+{
+  "name": "datalayer_turn_done",
+  "language": "en",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "{{1}} has finished what you asked. Reply to see the answer.",
+      "example": {
+        "body_text": [["Help Desk"]]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Show me"
+        }
+      ]
+    }
+  ]
+}

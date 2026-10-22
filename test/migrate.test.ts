@@ -43,7 +43,10 @@ describe.runIf(Boolean(DATABASE_URL))("migrate on PostgreSQL", () => {
       [
         ...hostTables("whatsapp"),
         "whatsapp_chat",
+        "whatsapp_hold",
+        "whatsapp_message_count",
         "whatsapp_message_status",
+        "whatsapp_template",
       ].sort(),
     );
     migrate();

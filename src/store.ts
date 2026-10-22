@@ -68,6 +68,20 @@ export type Chat = ChatKey &
     lastNoticeAt?: Date;
   }>;
 
+/** What waits for the window to reopen: a reference, never content. */
+export type HoldKind = "delivery" | "approval" | "link";
+export type Hold = Readonly<{ kind: HoldKind; ref: string; heldAt: Date }>;
+
+/** A notice template of a business account, as Meta last said it. */
+export type TemplateRow = Readonly<{
+  name: string;
+  status: string;
+  category: string;
+}>;
+
+/** What a number sent: free-form service messages, and utility templates. */
+export type MessageCategory = "service" | "utility";
+
 export interface WhatsAppStore {
   /** Keep a message's furthest status; idempotent, and never a step back. */
   applyStatus(update: StatusUpdate): Promise<void>;
@@ -87,6 +101,34 @@ export interface WhatsAppStore {
    * service never saw.
    */
   startOver(key: ChatKey, applicationId?: string): Promise<number>;
+  /** Hold a reference for the chat; `false` when it is held already. */
+  hold(key: ChatKey, kind: HoldKind, ref: string, at: Date): Promise<boolean>;
+  /** What the chat holds, oldest first. */
+  holds(key: ChatKey): Promise<Hold[]>;
+  /** Take what the chat holds, oldest first: each hold given out once. */
+  releaseHolds(key: ChatKey): Promise<Hold[]>;
+  /**
+   * Take the chat's notice: `true`, and the notice time set to `at`, only
+   * when notices are not stopped and none was sent after `notBefore`.
+   */
+  claimNotice(key: ChatKey, at: Date, notBefore: Date): Promise<boolean>;
+  /** No more notices to this person on this number; `false` for an unknown chat. */
+  stopNotices(key: ChatKey): Promise<boolean>;
+  setTemplate(
+    wabaId: string,
+    name: string,
+    change: Readonly<{ status?: string; category?: string }>,
+  ): Promise<void>;
+  templates(wabaId: string): Promise<TemplateRow[]>;
+  countMessage(
+    phoneNumberId: string,
+    month: string,
+    category: MessageCategory,
+  ): Promise<void>;
+  messageCounts(
+    phoneNumberId: string,
+    month: string,
+  ): Promise<Record<MessageCategory, number>>;
 }
 
 const chatKeyOf = (key: ChatKey): string =>
@@ -96,6 +138,9 @@ const chatKeyOf = (key: ChatKey): string =>
 export class MemoryStore implements WhatsAppStore {
   readonly #statuses = new Map<string, StatusRow>();
   readonly #chats = new Map<string, Chat>();
+  readonly #holds = new Map<string, (Hold & ChatKey)[]>();
+  readonly #templates = new Map<string, Map<string, TemplateRow>>();
+  readonly #counts = new Map<string, number>();
 
   async applyStatus(update: StatusUpdate): Promise<void> {
     const kept = this.#statuses.get(update.wamid);
@@ -154,5 +199,88 @@ export class MemoryStore implements WhatsAppStore {
       ...(applicationId !== undefined ? { applicationId } : {}),
     });
     return generation;
+  }
+
+  async hold(
+    key: ChatKey,
+    kind: HoldKind,
+    ref: string,
+    at: Date,
+  ): Promise<boolean> {
+    const held = this.#holds.get(chatKeyOf(key)) ?? [];
+    if (held.some((one) => one.kind === kind && one.ref === ref)) return false;
+    held.push({ ...key, heldAt: at, kind, ref });
+    this.#holds.set(chatKeyOf(key), held);
+    return true;
+  }
+
+  async holds(key: ChatKey): Promise<Hold[]> {
+    return (this.#holds.get(chatKeyOf(key)) ?? []).map(
+      ({ heldAt, kind, ref }) => ({ heldAt, kind, ref }),
+    );
+  }
+
+  async releaseHolds(key: ChatKey): Promise<Hold[]> {
+    const held = await this.holds(key);
+    this.#holds.delete(chatKeyOf(key));
+    return held;
+  }
+
+  async claimNotice(key: ChatKey, at: Date, notBefore: Date): Promise<boolean> {
+    const chat = this.#chats.get(chatKeyOf(key));
+    if (!chat || chat.noticesStopped) return false;
+    if (chat.lastNoticeAt && chat.lastNoticeAt.getTime() > notBefore.getTime())
+      return false;
+    this.#chats.set(chatKeyOf(key), { ...chat, lastNoticeAt: at });
+    return true;
+  }
+
+  async stopNotices(key: ChatKey): Promise<boolean> {
+    const chat = this.#chats.get(chatKeyOf(key));
+    if (!chat) return false;
+    this.#chats.set(chatKeyOf(key), { ...chat, noticesStopped: true });
+    return true;
+  }
+
+  async setTemplate(
+    wabaId: string,
+    name: string,
+    change: Readonly<{ status?: string; category?: string }>,
+  ): Promise<void> {
+    const account =
+      this.#templates.get(wabaId) ?? new Map<string, TemplateRow>();
+    const kept = account.get(name);
+    if (!kept && (!change.status || !change.category))
+      throw new Error(`A new template ${name} needs its status and category.`);
+    account.set(name, {
+      category: change.category ?? kept?.category ?? "",
+      name,
+      status: change.status ?? kept?.status ?? "",
+    });
+    this.#templates.set(wabaId, account);
+  }
+
+  async templates(wabaId: string): Promise<TemplateRow[]> {
+    return [...(this.#templates.get(wabaId)?.values() ?? [])].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  }
+
+  async countMessage(
+    phoneNumberId: string,
+    month: string,
+    category: MessageCategory,
+  ): Promise<void> {
+    const key = JSON.stringify([phoneNumberId, month, category]);
+    this.#counts.set(key, (this.#counts.get(key) ?? 0) + 1);
+  }
+
+  async messageCounts(
+    phoneNumberId: string,
+    month: string,
+  ): Promise<Record<MessageCategory, number>> {
+    const of = (category: MessageCategory) =>
+      this.#counts.get(JSON.stringify([phoneNumberId, month, category])) ?? 0;
+    return { service: of("service"), utility: of("utility") };
   }
 }

@@ -4,7 +4,11 @@ import {
   STATUS_RANK,
   type Chat,
   type ChatKey,
+  type Hold,
+  type HoldKind,
+  type MessageCategory,
   type MessageStatus,
+  type TemplateRow,
   type StatusRow,
   type StatusUpdate,
   type WhatsAppStore,
@@ -40,6 +44,14 @@ function chatOf(row: ChatRow): Chat {
       : {}),
   };
 }
+
+type HoldRow = { kind: HoldKind; ref: string; held_at: Date };
+
+const holdOf = (row: HoldRow): Hold => ({
+  heldAt: row.held_at,
+  kind: row.kind,
+  ref: row.ref,
+});
 
 /** The store on PostgreSQL (`migrations/`), the service's in production. */
 export class PostgresStore implements WhatsAppStore {
@@ -132,5 +144,135 @@ export class PostgresStore implements WhatsAppStore {
     const row = rows[0];
     if (!row) throw new Error("startOver names a chat the service never saw.");
     return row.generation;
+  }
+
+  async hold(
+    key: ChatKey,
+    kind: HoldKind,
+    ref: string,
+    at: Date,
+  ): Promise<boolean> {
+    const { rowCount } = await this.database.query(
+      `INSERT INTO whatsapp_hold (phone_number_id, user_id, kind, ref, held_at)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (phone_number_id, user_id, kind, ref) DO NOTHING`,
+      [key.phoneNumberId, key.userId, kind, ref, at],
+    );
+    return rowCount === 1;
+  }
+
+  async holds(key: ChatKey): Promise<Hold[]> {
+    const { rows } = await this.database.query<HoldRow>(
+      `SELECT kind, ref, held_at FROM whatsapp_hold
+        WHERE phone_number_id = $1 AND user_id = $2 ORDER BY held_at, id`,
+      [key.phoneNumberId, key.userId],
+    );
+    return rows.map(holdOf);
+  }
+
+  async releaseHolds(key: ChatKey): Promise<Hold[]> {
+    // One statement: two workers releasing at once each take a hold once.
+    const { rows } = await this.database.query<HoldRow & { id: string }>(
+      `DELETE FROM whatsapp_hold
+        WHERE phone_number_id = $1 AND user_id = $2
+        RETURNING id, kind, ref, held_at`,
+      [key.phoneNumberId, key.userId],
+    );
+    return rows
+      .sort(
+        (a, b) =>
+          a.held_at.getTime() - b.held_at.getTime() ||
+          Number(a.id) - Number(b.id),
+      )
+      .map(holdOf);
+  }
+
+  async claimNotice(key: ChatKey, at: Date, notBefore: Date): Promise<boolean> {
+    const { rowCount } = await this.database.query(
+      `UPDATE whatsapp_chat SET last_notice_at = $3, updated_at = now()
+        WHERE phone_number_id = $1 AND user_id = $2
+          AND NOT notices_stopped
+          AND (last_notice_at IS NULL OR last_notice_at <= $4)`,
+      [key.phoneNumberId, key.userId, at, notBefore],
+    );
+    return rowCount === 1;
+  }
+
+  async stopNotices(key: ChatKey): Promise<boolean> {
+    const { rowCount } = await this.database.query(
+      `UPDATE whatsapp_chat SET notices_stopped = true, updated_at = now()
+        WHERE phone_number_id = $1 AND user_id = $2`,
+      [key.phoneNumberId, key.userId],
+    );
+    return rowCount === 1;
+  }
+
+  async setTemplate(
+    wabaId: string,
+    name: string,
+    change: Readonly<{ status?: string; category?: string }>,
+  ): Promise<void> {
+    const { rowCount } = await this.database.query(
+      `UPDATE whatsapp_template SET
+         status = COALESCE($3, status),
+         category = COALESCE($4, category),
+         updated_at = now()
+       WHERE waba_id = $1 AND name = $2`,
+      [wabaId, name, change.status ?? null, change.category ?? null],
+    );
+    if (rowCount === 1) return;
+    if (!change.status || !change.category)
+      throw new Error(`A new template ${name} needs its status and category.`);
+    await this.database.query(
+      `INSERT INTO whatsapp_template (waba_id, name, status, category)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (waba_id, name) DO UPDATE SET
+         status = EXCLUDED.status, category = EXCLUDED.category, updated_at = now()`,
+      [wabaId, name, change.status, change.category],
+    );
+  }
+
+  async templates(wabaId: string): Promise<TemplateRow[]> {
+    const { rows } = await this.database.query<TemplateRow>(
+      `SELECT name, status, category FROM whatsapp_template
+        WHERE waba_id = $1 ORDER BY name`,
+      [wabaId],
+    );
+    return rows.map(({ category, name, status }) => ({
+      category,
+      name,
+      status,
+    }));
+  }
+
+  async countMessage(
+    phoneNumberId: string,
+    month: string,
+    category: MessageCategory,
+  ): Promise<void> {
+    await this.database.query(
+      `INSERT INTO whatsapp_message_count (phone_number_id, month, category, sent)
+       VALUES ($1, $2, $3, 1)
+       ON CONFLICT (phone_number_id, month, category) DO UPDATE SET
+         sent = whatsapp_message_count.sent + 1`,
+      [phoneNumberId, month, category],
+    );
+  }
+
+  async messageCounts(
+    phoneNumberId: string,
+    month: string,
+  ): Promise<Record<MessageCategory, number>> {
+    const { rows } = await this.database.query<{
+      category: MessageCategory;
+      sent: number;
+    }>(
+      `SELECT category, sent FROM whatsapp_message_count
+        WHERE phone_number_id = $1 AND month = $2`,
+      [phoneNumberId, month],
+    );
+    const of = (category: MessageCategory) =>
+      rows.find((row) => row.category === category)?.sent ?? 0;
+    return { service: of("service"), utility: of("utility") };
   }
 }

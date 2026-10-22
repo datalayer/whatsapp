@@ -1,0 +1,23 @@
+{
+  "name": "datalayer_link_reminder",
+  "language": "en",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "You asked to link your Datalayer account with {{1}}. Reply to get a new link.",
+      "example": {
+        "body_text": [["Help Desk"]]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Get a link"
+        }
+      ]
+    }
+  ]
+}

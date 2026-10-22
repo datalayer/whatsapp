@@ -6,6 +6,7 @@ import {
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
 
 import type { ChatKey, WhatsAppStore } from "./store.js";
+import type { WindowKeeper } from "./window.js";
 
 /**
  * The words a person writes to the number, alone in a message: `help`,
@@ -70,6 +71,7 @@ export type CommandContext = Readonly<{
 
 export type CommandDependencies = Readonly<{
   store: WhatsAppStore;
+  window: WindowKeeper;
   hosts: Pick<DatalayerHostClient, "linkCode" | "self" | "unlink">;
   /** Datalayer's web origin, where a link is confirmed. */
   webUrl: string;
@@ -95,7 +97,8 @@ export const SAY = {
   stopBeforeSwitch:
     "An answer is running. Write `stop` first, then choose the application again.",
   stopped: "Stopped.",
-  nothingRunning: "Nothing is running.",
+  noticesStopped:
+    "Nothing is running, so no more notices from this number after a day of silence. Your questions are still answered.",
   notLinkedHere: "No Datalayer account is linked here.",
   unlinked:
     "Your Datalayer account is unlinked from this number. `link` links it again.",
@@ -140,7 +143,7 @@ const HELP: Readonly<Record<Word, string>> = {
   status: "your link, the application, what runs",
   app: "choose the application (linked accounts)",
   "start over": "a new conversation from here",
-  stop: "stop the running answer",
+  stop: "stop the running answer; with none, no more notices",
   link: "link your Datalayer account",
   unlink: "unlink it",
 };
@@ -201,6 +204,9 @@ export async function runWord(
             : "Your Datalayer account is not linked: write `link`.",
         application ? `This chat talks to ${application}.` : SAY.noApplication,
         ...(self.paused ? ["The owner has paused this number."] : []),
+        ...((await store.chat(context.chat))?.noticesStopped
+          ? ["No notices after a day of silence: you wrote `stop`."]
+          : []),
         context.turn ? "An answer is running: `stop` stops it." : "",
       ].filter(Boolean);
       return [text(lines.join("\n"))];
@@ -245,7 +251,11 @@ export async function runWord(
       ];
     }
     case "stop": {
-      if (!context.turn) return [text(SAY.nothingRunning)];
+      // With no answer running, `stop` is WhatsApp's opt-out: no notices.
+      if (!context.turn) {
+        await dependencies.window.stop(context.chat);
+        return [text(SAY.noticesStopped)];
+      }
       await context.turn.stop();
       return [text(SAY.stopped)];
     }

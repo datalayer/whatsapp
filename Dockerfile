@@ -14,6 +14,7 @@ COPY scripts ./scripts
 RUN npm run fetch:agent-runtimes
 COPY tsconfig.json ./
 COPY src ./src
+COPY templates ./templates
 RUN npm run bundle
 
 FROM node:22.20.0-bookworm-slim AS runtime

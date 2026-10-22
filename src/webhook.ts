@@ -94,6 +94,7 @@ export const ACCOUNT_FIELDS = [
   "account_update",
   "message_template_status_update",
   "phone_number_quality_update",
+  "template_category_update",
 ] as const;
 
 const id = z.string().min(1).max(512);

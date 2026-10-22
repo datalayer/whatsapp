@@ -6,7 +6,7 @@
 
 A business connects **its own WhatsApp number** to an application it deployed on Datalayer, and the application answers on that number: the same session, rules, tools, connections, approvals and record as on datalayer.ai. WhatsApp is a host of Datalayer's existing session and approval contracts (the shared host kit in agent-runtimes' `src/portable/hosts`, `kind: "whatsapp"`); it is not a separate agent runtime. The service speaks Meta's WhatsApp Business Platform (Cloud API) directly.
 
-**State:** the webhook ingress, and the words a person writes (`src/commands.ts`), not yet wired to a worker. Install, turns, deliveries and approvals are not built yet; nothing is deployed.
+**State:** the webhook ingress, the words a person writes (`src/commands.ts`) and the 24-hour window keeper (`src/window.ts`, the notice templates in `templates/`), not yet wired to a worker. Install, turns, deliveries and approvals are not built yet; nothing is deployed.
 
 ## What it does today
 
@@ -18,6 +18,10 @@ A business connects **its own WhatsApp number** to an application it deployed on
 ## The words
 
 A person writes one of these alone in a message, in any case: `help` (what answers here, how to reach a person at the business, and these words), `status`, `app` (a list to choose the application, for a linked Datalayer account), `start over`, `stop`, `link` (a one-use button to confirm on datalayer.ai), `unlink`. Inside a sentence, a word is part of the question.
+
+## The 24-hour window
+
+WhatsApp lets a business say anything for 24 hours after the person's last message; after that, only an approved template. The window keeper holds what comes later (an answer, an approval) by reference, sends at most one notice per person per 24 hours (`templates/`: three utility templates naming the application only, created in the business's account at install), and gives back what was held when the person replies. `stop`, with no answer running, ends notices to that person; a template Meta rejects or recategorizes pauses every notice of the account. The messages sent per number and month are counted against Meta's free tier of service messages.
 
 ## Security and privacy
 
