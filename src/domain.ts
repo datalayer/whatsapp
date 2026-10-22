@@ -37,7 +37,7 @@ export function externalIdOf(wabaId: string, phoneNumberId: string): string {
 /**
  * The longest place id a runtime takes: a BSUID runs to 131 characters (a
  * country code, a period and up to 128), which a runtime's session API
- * admits from agent-runtimes 1.5.84 (255 characters); 1.5.83 took 128.
+ * admits from agent-runtimes 1.5.84 (255 characters), the version pinned.
  */
 export const PLACE_ID_LIMIT = 255;
 
