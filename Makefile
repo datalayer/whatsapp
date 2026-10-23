@@ -4,7 +4,10 @@
 # 0.1.0: the webhook ingress, install, removal, the 1:1 turn, deliveries,
 #        approvals and the window keeper (whatsapp 9d9cba2, agent-runtimes 1.5.84).
 # 0.1.0: pushed 22 October 2026 (sha256:83ce234dabaa…), pinned in up.sh datalayer_whatsapp.
-VERSION ?= 0.1.0
+# 0.1.1: install without Meta's account and number in the signup message (debug_token), numbers
+#        kept on the WhatsApp Business app (coexistence), the business's privacy page kept
+#        (migration 005), unlink and forget naming what they leave (181c11a, 0cee3c0).
+VERSION ?= 0.1.1
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 
