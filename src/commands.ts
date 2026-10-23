@@ -102,7 +102,7 @@ export const SAY = {
     "Nothing is running, so no more notices from this number after a day of silence. Your questions are still answered.",
   notLinkedHere: "No Datalayer account is linked here.",
   unlinked:
-    "Your Datalayer account is unlinked from this number. `link` links it again.",
+    "Your Datalayer account is unlinked from this number. `link` links it again. Your sign-ins at companies (Settings → Connections in Datalayer) are not changed: disconnect them there.",
   linkUnavailable:
     "Datalayer did not give a link just now. Nothing was changed; try again in a moment.",
 } as const;
@@ -306,7 +306,7 @@ export async function runWord(
       logger.info("person.forgotten", { rows: deleted });
       return [
         text(
-          `Done: ${revoked ? "your Datalayer account is unlinked from this number, and " : ""}${deleted} record${deleted === 1 ? "" : "s"} naming you here ${deleted === 1 ? "is" : "are"} deleted. Your conversations stay in Datalayer under its record retention: delete them there. Meta keeps its own copy of the messages for up to 30 days.`,
+          `Done: ${revoked ? "your Datalayer account is unlinked from this number, and " : ""}${deleted} record${deleted === 1 ? "" : "s"} naming you here ${deleted === 1 ? "is" : "are"} deleted. Your conversations stay in Datalayer under its record retention: delete them there. Meta keeps its own copy of the messages for up to 30 days. Your sign-ins at companies (Settings → Connections in Datalayer) are not changed: disconnect them there.`,
         ),
       ];
     }

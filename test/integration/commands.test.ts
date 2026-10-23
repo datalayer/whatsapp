@@ -305,7 +305,7 @@ describe.each(storeCases())("the words on $name", ({ store }) => {
     );
     const said = textOf(await linked.run("forget"));
     expect(said).toBe(
-      "Done: your Datalayer account is unlinked from this number, and 3 records naming you here are deleted. Your conversations stay in Datalayer under its record retention: delete them there. Meta keeps its own copy of the messages for up to 30 days.",
+      "Done: your Datalayer account is unlinked from this number, and 3 records naming you here are deleted. Your conversations stay in Datalayer under its record retention: delete them there. Meta keeps its own copy of the messages for up to 30 days. Your sign-ins at companies (Settings → Connections in Datalayer) are not changed: disconnect them there.",
     );
     expect(linked.hosts.calls).toEqual([
       `unlink:dlhk_test-only-host-key:${ALICE}`,
