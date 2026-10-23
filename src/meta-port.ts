@@ -102,7 +102,8 @@ export class MetaError extends Error {
     readonly status: number,
     readonly code: number | undefined,
     readonly subcode: number | undefined,
-    what: string,
+    /** The step Meta refused, in the service's words (no id, no token). */
+    readonly what: string,
   ) {
     super(
       `${what}: Meta answered ${status}${code !== undefined ? ` (code ${code}${subcode !== undefined ? `/${subcode}` : ""})` : ""}.`,

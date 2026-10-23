@@ -245,7 +245,14 @@ export async function install(
       ]);
   } catch (error) {
     if (!(error instanceof MetaError)) throw error;
-    logger.warn("install.meta_refused", { error });
+    // Which step, and Meta's own codes: the error's message is redacted by
+    // the kit's logger (its field name), these are not and carry nothing private.
+    logger.warn("install.meta_refused", {
+      step: error.what,
+      status: error.status,
+      meta_error: error.code,
+      meta_subcode: error.subcode,
+    });
     return { error: INSTALL_WORDS.meta, ok: false };
   }
   const externalId = externalIdOf(wabaId, phoneNumberId);
