@@ -11,7 +11,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 
 import { externalIdOf } from "./domain.js";
-import { MetaError, type MetaPort, type TemplateState } from "./meta-port.js";
+import {
+  BUSINESS_APP_SYNCS,
+  MetaError,
+  type MetaPort,
+  type TemplateState,
+} from "./meta-port.js";
 import type { Routes } from "./server.js";
 import { installationData, type WhatsAppStore } from "./store.js";
 import { BodyTooLargeError, rawBodyOf } from "./verify.js";
@@ -32,20 +37,52 @@ import { TEMPLATES, type WindowKeeper } from "./window.js";
  * secret encrypted. A bind code that is spent or expired stores nothing; a
  * reinstall of the same number replaces the old installation, which ends at
  * Datalayer. Only the card's origin may post (CORS).
+ *
+ * When the signup's window did not say the account or the number, the
+ * service finds them from the business token: the account Meta's
+ * debug_token says was granted last, and its only number (several, or
+ * none, and nothing is kept). A number kept on the WhatsApp Business app
+ * (Meta's coexistence, `coexistence: true`) is not registered again: its
+ * contacts and history syncs are asked once instead, as Meta requires
+ * within 24 hours; what Meta sends back is not kept. The business's
+ * support contact and privacy page are kept with the installation.
  */
 
 export const INSTALL_PATH = "/whatsapp/install";
 /** The most an install request carries. */
 export const INSTALL_BODY_LIMIT = 16 * 1024;
 
+const metaId = z.string().regex(/^\d{1,32}$/);
+
 const requestSchema = z
   .object({
     bind_code: z.string().regex(/^[A-Za-z0-9_-]{8,200}$/),
     code: z.string().min(1).max(2048),
-    waba_id: z.string().regex(/^\d{1,32}$/),
-    phone_number_id: z.string().regex(/^\d{1,32}$/),
+    /**
+     * The business account and the number, as the signup's window said them.
+     * Either may be missing (a number kept on the WhatsApp Business app is
+     * answered with its account only, and Meta's window sometimes says
+     * nothing): the service then finds them from the business token.
+     */
+    waba_id: metaId.optional(),
+    phone_number_id: metaId.optional(),
+    /** The number stays on the WhatsApp Business app (Meta's coexistence): never registered again. */
+    coexistence: z.boolean().optional(),
     /** How a person reaches someone at the business: said in every chat. */
     support: z.string().trim().min(3).max(200),
+    /** The business's privacy page, https: kept with the installation. */
+    privacy: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine((value) => {
+        try {
+          const url = new URL(value);
+          return url.protocol === "https:" && url.hostname.includes(".");
+        } catch {
+          return false;
+        }
+      }),
   })
   .strict();
 
@@ -72,6 +109,10 @@ export const INSTALL_WORDS = {
     "Meta did not confirm the signup: connect the number again from the Ship tab.",
   notTheAccounts:
     "That number is not one of the business account Meta answered.",
+  noAccount:
+    "Meta did not say which WhatsApp business account was shared: connect the number again from the Ship tab.",
+  whichNumber:
+    "Meta did not say which number was connected, and the business account has several or none: connect the number again from the Ship tab.",
   meta: "Meta refused a step of the install: nothing was kept. Try again from the Ship tab.",
   bind: "The install's code from Datalayer was used or expired: nothing was kept. Connect the number again from the Ship tab.",
 } as const;
@@ -155,9 +196,6 @@ export async function install(
   request: z.infer<typeof requestSchema>,
 ): Promise<InstallOutcome> {
   const { port, store, cipher, hosts, logger } = dependencies;
-  const wabaId = request.waba_id;
-  const phoneNumberId = request.phone_number_id;
-  const externalId = externalIdOf(wabaId, phoneNumberId);
   let token: string;
   try {
     token = await port.exchangeCode(request.code);
@@ -165,17 +203,41 @@ export async function install(
     logger.warn("install.code_refused", { error });
     return { error: INSTALL_WORDS.signup, ok: false };
   }
+  const coexistence = request.coexistence === true;
+  let wabaId: string;
+  let phoneNumberId: string;
   let name: string;
-  const pin = newPin();
+  const pin = coexistence ? undefined : newPin();
   const templates: Array<[string, TemplateState]> = [];
   try {
-    const number = (await port.numbers(token, wabaId)).find(
-      (one) => one.id === phoneNumberId,
-    );
-    if (!number) return { error: INSTALL_WORDS.notTheAccounts, ok: false };
+    // The account: as the window said it, else the newest one the token was granted.
+    const account =
+      request.waba_id ?? (await port.grantedAccounts(token)).at(0);
+    if (!account) return { error: INSTALL_WORDS.noAccount, ok: false };
+    wabaId = account;
+    const numbers = await port.numbers(token, wabaId);
+    // The number: as the window said it, else the account's only one.
+    const number = request.phone_number_id
+      ? numbers.find((one) => one.id === request.phone_number_id)
+      : numbers.length === 1
+        ? numbers[0]
+        : undefined;
+    if (!number)
+      return {
+        error: request.phone_number_id
+          ? INSTALL_WORDS.notTheAccounts
+          : INSTALL_WORDS.whichNumber,
+        ok: false,
+      };
+    phoneNumberId = number.id;
     name = number.verifiedName || "The business";
     await port.subscribe(token, wabaId);
-    await port.register(token, phoneNumberId, pin);
+    if (pin === undefined)
+      // Kept on the WhatsApp Business app: registered already; Meta asks
+      // for its contacts and history syncs once, within 24 hours.
+      for (const kind of BUSINESS_APP_SYNCS)
+        await port.syncBusinessApp(token, phoneNumberId, kind);
+    else await port.register(token, phoneNumberId, pin);
     for (const template of Object.values(TEMPLATES))
       templates.push([
         template.name,
@@ -186,6 +248,7 @@ export async function install(
     logger.warn("install.meta_refused", { error });
     return { error: INSTALL_WORDS.meta, ok: false };
   }
+  const externalId = externalIdOf(wabaId, phoneNumberId);
   let bound;
   try {
     bound = await hosts.bind({ code: request.bind_code, externalId, name });
@@ -246,7 +309,15 @@ export async function install(
     hostUid: bound.hostUid,
     organizationUid: self.accountUid,
     phoneNumberId,
-    pin: cipher.encrypt(pin, installationData("pin", wabaId, phoneNumberId)),
+    ...(pin === undefined
+      ? {}
+      : {
+          pin: cipher.encrypt(
+            pin,
+            installationData("pin", wabaId, phoneNumberId),
+          ),
+        }),
+    privacy: request.privacy,
     state: "active",
     support: request.support,
     wabaId,

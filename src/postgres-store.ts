@@ -104,12 +104,13 @@ type InstallationRow = {
   organization_uid: string;
   business_name: string;
   support: string;
+  privacy: string;
   state: InstallationState;
   removed_at: Date | null;
 };
 
 const INSTALLATION_COLUMNS = `waba_id, phone_number_id, host_uid, host_key, business_token,
-  pin, delivery_secret, organization_uid, business_name, support, state, removed_at`;
+  pin, delivery_secret, organization_uid, business_name, support, privacy, state, removed_at`;
 
 function installationOf(row: InstallationRow): Installation {
   return {
@@ -119,6 +120,7 @@ function installationOf(row: InstallationRow): Installation {
     organizationUid: row.organization_uid,
     phoneNumberId: row.phone_number_id,
     state: row.state,
+    privacy: row.privacy,
     support: row.support,
     wabaId: row.waba_id,
     ...(row.business_token ? { businessToken: row.business_token } : {}),
@@ -474,7 +476,7 @@ export class PostgresStore implements WhatsAppStore {
   async saveInstallation(installation: Installation): Promise<void> {
     await this.database.query(
       `INSERT INTO whatsapp_installation (${INSTALLATION_COLUMNS})
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT (waba_id, phone_number_id) DO UPDATE SET
          host_uid = EXCLUDED.host_uid,
          host_key = EXCLUDED.host_key,
@@ -484,6 +486,7 @@ export class PostgresStore implements WhatsAppStore {
          organization_uid = EXCLUDED.organization_uid,
          business_name = EXCLUDED.business_name,
          support = EXCLUDED.support,
+         privacy = EXCLUDED.privacy,
          state = EXCLUDED.state,
          removed_at = EXCLUDED.removed_at,
          installed_at = now(),
@@ -503,6 +506,7 @@ export class PostgresStore implements WhatsAppStore {
         installation.organizationUid,
         installation.businessName,
         installation.support,
+        installation.privacy,
         installation.state,
         installation.removedAt ?? null,
       ],

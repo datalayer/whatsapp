@@ -78,6 +78,7 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
     bind_code: bind,
     code: "signup-code",
     phone_number_id: PHONE_NUMBER_ID,
+    privacy: "https://acme.example/privacy",
     support: "support@acme.example",
     waba_id: WABA,
   });
@@ -118,6 +119,7 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
       hostUid: "host-bound-1",
       organizationUid: "account-1",
       phoneNumberId: PHONE_NUMBER_ID,
+      privacy: "https://acme.example/privacy",
       state: "active",
       support: "support@acme.example",
       wabaId: WABA,
@@ -240,6 +242,112 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
     });
     expect(elsewhere.status).toBe(403);
     expect(elsewhere.headers.get("access-control-allow-origin")).toBeNull();
+    expect(meta.calls).toEqual([]);
+    expect(await kept.installations()).toEqual([]);
+  });
+
+  it("finds the account and the number from the business token when the signup's window said neither", async () => {
+    const { hosts, kept, meta, post } = await setup();
+    meta.grantedOf = [WABA, "777"];
+    const { waba_id: _waba, phone_number_id: _number, ...bare } = request();
+    void _waba;
+    void _number;
+    const response = await post(bare);
+    expect(await response.json()).toEqual({
+      connected: true,
+      name: "Acme SRL",
+    });
+    expect(meta.calls.slice(0, 3).map((one) => one.method)).toEqual([
+      "exchangeCode",
+      "grantedAccounts",
+      "numbers",
+    ]);
+    expect(meta.calls.find((one) => one.method === "numbers")?.detail).toBe(
+      WABA,
+    );
+    expect(hosts.binds[0]?.externalId).toBe(`${WABA}:${PHONE_NUMBER_ID}`);
+    expect((await kept.installations())[0]?.phoneNumberId).toBe(
+      PHONE_NUMBER_ID,
+    );
+  });
+
+  it("keeps nothing when the token names no account, or the account has several numbers and none was said", async () => {
+    const { hosts, kept, meta, post } = await setup();
+    const { waba_id: _waba, phone_number_id: _number, ...bare } = request();
+    void _waba;
+    void _number;
+    meta.grantedOf = [];
+    expect(await (await post(bare)).json()).toEqual({
+      error: INSTALL_WORDS.noAccount,
+    });
+    meta.grantedOf = [WABA];
+    meta.numbersOf = [
+      { id: PHONE_NUMBER_ID, verifiedName: "Acme SRL" },
+      { id: "999", verifiedName: "Acme SRL" },
+    ];
+    expect(await (await post(bare)).json()).toEqual({
+      error: INSTALL_WORDS.whichNumber,
+    });
+    meta.numbersOf = [];
+    expect(await (await post({ ...bare, waba_id: WABA })).json()).toEqual({
+      error: INSTALL_WORDS.whichNumber,
+    });
+    // The number said, the account found: one of several is enough.
+    meta.numbersOf = [
+      { id: "999", verifiedName: "Other" },
+      { id: PHONE_NUMBER_ID, verifiedName: "Acme SRL" },
+    ];
+    expect(hosts.binds).toEqual([]);
+    expect(await kept.installations()).toEqual([]);
+    expect(
+      (await post({ ...bare, phone_number_id: PHONE_NUMBER_ID })).status,
+    ).toBe(200);
+    expect(meta.calls.some((one) => one.method === "subscribe")).toBe(true);
+  });
+
+  it("connects a number kept on the WhatsApp Business app without registering it: its two syncs asked once, no PIN kept", async () => {
+    const { kept, meta, post } = await setup();
+    const { phone_number_id: _number, ...signedUp } = request();
+    void _number;
+    const response = await post({ ...signedUp, coexistence: true });
+    expect(await response.json()).toEqual({
+      connected: true,
+      name: "Acme SRL",
+    });
+    expect(meta.calls.map((one) => one.method)).toEqual([
+      "exchangeCode",
+      "numbers",
+      "subscribe",
+      "syncBusinessApp",
+      "syncBusinessApp",
+      "createTemplate",
+      "createTemplate",
+      "createTemplate",
+    ]);
+    expect(
+      meta.calls
+        .filter((one) => one.method === "syncBusinessApp")
+        .map((one) => [one.phoneNumberId, one.detail]),
+    ).toEqual([
+      [PHONE_NUMBER_ID, "smb_app_state_sync"],
+      [PHONE_NUMBER_ID, "history"],
+    ]);
+    const [installation] = await kept.installations();
+    expect(installation?.state).toBe("active");
+    expect(installation?.pin).toBeUndefined();
+  });
+
+  it("refuses a connection without an https privacy page", async () => {
+    const { kept, meta, post } = await setup();
+    const { privacy: _privacy, ...without } = request();
+    void _privacy;
+    expect((await post(without)).status).toBe(400);
+    for (const privacy of [
+      "http://acme.example/privacy",
+      "acme.example/privacy",
+      "https://localhost/privacy",
+    ])
+      expect((await post({ ...request(), privacy })).status).toBe(400);
     expect(meta.calls).toEqual([]);
     expect(await kept.installations()).toEqual([]);
   });

@@ -130,6 +130,8 @@ export type Installation = Readonly<{
   businessName: string;
   /** How a person reaches someone at the business: a phone, a mail address, a page. */
   support: string;
+  /** The business's privacy page (https), asked on the Ship card before connecting. */
+  privacy: string;
   state: InstallationState;
   removedAt?: Date;
 }>;

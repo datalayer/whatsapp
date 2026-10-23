@@ -19,6 +19,7 @@ import { whatsappShape, type WhatsAppTurn } from "../../src/domain.js";
 import {
   MetaError,
   checkLimits,
+  type BusinessAppSync,
   type BusinessNumber,
   type MetaPort,
   type Outgoing,
@@ -79,6 +80,8 @@ export class FakeMeta implements MetaPort {
     { id: PHONE_NUMBER_ID, verifiedName: "Acme SRL" },
   ];
   templateStatus = "APPROVED";
+  /** The business accounts debug_token says the signup's token was granted, newest first. */
+  grantedOf: string[] = [WABA];
   #sent = 0;
 
   constructor(readonly clock: FakeClock) {}
@@ -162,6 +165,24 @@ export class FakeMeta implements MetaPort {
   async exchangeCode(code: string): Promise<string> {
     this.#record({ detail: code, method: "exchangeCode" });
     return BUSINESS_TOKEN;
+  }
+
+  async grantedAccounts(token: string): Promise<string[]> {
+    this.#record({ method: "grantedAccounts", token });
+    return this.grantedOf;
+  }
+
+  async syncBusinessApp(
+    token: string,
+    phoneNumberId: string,
+    kind: BusinessAppSync,
+  ): Promise<void> {
+    this.#record({
+      detail: kind,
+      method: "syncBusinessApp",
+      phoneNumberId,
+      token,
+    });
   }
 
   async numbers(token: string, wabaId: string): Promise<BusinessNumber[]> {
@@ -372,6 +393,7 @@ export function installation(
       "123456",
       installationData("pin", wabaId, phoneNumberId),
     ),
+    privacy: "https://acme.example/privacy",
     state: "active",
     support: "support@acme.example",
     wabaId,

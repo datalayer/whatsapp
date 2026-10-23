@@ -201,4 +201,49 @@ describe("the Graph API port", () => {
     expect(JSON.parse(seen[2]!.body)).toEqual(TEMPLATES.delivery);
     expect(seen[3]!.path).toContain("name=datalayer_turn_done");
   });
+
+  it("finds the granted business accounts with the app's token, newest first, and asks a business app number's syncs", async () => {
+    const { port, seen } = await setup([
+      {
+        body: {
+          data: {
+            app_id: "1000000000000001",
+            granular_scopes: [
+              { scope: "business_management" },
+              {
+                scope: "whatsapp_business_management",
+                target_ids: [WABA, "555", "not-an-id"],
+              },
+              { scope: "whatsapp_business_messaging", target_ids: ["999"] },
+            ],
+            is_valid: true,
+          },
+        },
+        status: 200,
+      },
+      { body: { data: { granular_scopes: [] } }, status: 200 },
+      {
+        body: { messaging_product: "whatsapp", request_id: "r-1" },
+        status: 200,
+      },
+    ]);
+    expect(await port.grantedAccounts(TOKEN)).toEqual([WABA, "555"]);
+    expect(await port.grantedAccounts(TOKEN)).toEqual([]);
+    const debug = new URL(`http://x${seen[0]!.path}`);
+    expect(debug.pathname).toBe("/v23.0/debug_token");
+    expect(debug.searchParams.get("input_token")).toBe(TOKEN);
+    // The app's token in the header, never the secret in the address.
+    expect(seen[0]!.auth).toBe("Bearer 1000000000000001|test-only-app-secret");
+    expect(seen[0]!.path).not.toContain("test-only-app-secret");
+    await port.syncBusinessApp(TOKEN, PHONE_NUMBER_ID, "history");
+    expect(seen[2]).toMatchObject({
+      auth: `Bearer ${TOKEN}`,
+      method: "POST",
+      path: `/v23.0/${PHONE_NUMBER_ID}/smb_app_data`,
+    });
+    expect(JSON.parse(seen[2]!.body)).toEqual({
+      messaging_product: "whatsapp",
+      sync_type: "history",
+    });
+  });
 });
