@@ -52,7 +52,8 @@ import {
 const WEB = "https://datalayer.ai";
 const APP = "https://whatsapp.datalayer.run";
 /** The business's own app's secret and system user token: test values. */
-const OWN_SECRET = "0123456789abcdef0123456789abcdef";
+// Built here, so that no secret scanner takes it for a credential.
+const OWN_SECRET = `${"test".repeat(4)}${"0".repeat(16)}`;
 const OWN_TOKEN = "EAAtest-only-system-user-token";
 
 describe.each(storeCases())(

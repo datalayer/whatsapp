@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "pg": "8.23.1",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "peerDependencies": {
     "@datalayer/agent-runtimes": ">=1.5.84 <2"
