@@ -8,7 +8,9 @@
 #        kept on the WhatsApp Business app (coexistence), the business's privacy page kept
 #        (migration 005), unlink and forget naming what they leave (181c11a, 0cee3c0).
 # 0.1.2: a refused install step logs which step and Meta's codes (c4672bd).
-VERSION ?= 0.1.2
+# 0.1.3: connect with the business's own Meta app (per-installation webhook, app secret kept),
+#        a number already on the Cloud API not registered again (4c711a6, a1ee140).
+VERSION ?= 0.1.3
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 
