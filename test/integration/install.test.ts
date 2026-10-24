@@ -14,6 +14,7 @@ import {
   capturingLogger,
   PHONE_NUMBER_ID,
   serve,
+  VERIFY_TOKEN,
   WABA,
 } from "../support/meta.js";
 import { storeCases } from "../support/stores.js";
@@ -58,6 +59,7 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
         logger,
         port: meta,
         store: kept,
+        verifyToken: VERIFY_TOKEN,
         webUrl: WEB,
         window,
       }),
@@ -96,6 +98,7 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
       "exchangeCode",
       "numbers",
       "subscribe",
+      "onCloudApi",
       "register",
       "createTemplate",
       "createTemplate",
@@ -191,13 +194,32 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
     ];
     refused.meta.failNext(
       "register",
-      new MetaError(400, 133005, undefined, "x"),
+      new MetaError(400, 133016, undefined, "x"),
     );
     expect(await (await refused.post(request())).json()).toEqual({
       error: INSTALL_WORDS.meta,
     });
+    // A PIN set on the number already: said so.
+    refused.meta.failNext(
+      "register",
+      new MetaError(400, 133005, undefined, "x"),
+    );
+    expect(await (await refused.post(request())).json()).toEqual({
+      error: INSTALL_WORDS.pinMismatch,
+    });
     expect(refused.hosts.binds).toEqual([]);
     expect(await refused.kept.installations()).toEqual([]);
+  });
+
+  it("does not register again a number on the Cloud API already, and keeps no PIN for it", async () => {
+    const { kept, meta, post } = await setup();
+    meta.registered = true;
+    expect((await post(request())).status).toBe(200);
+    expect(meta.calls.some((one) => one.method === "register")).toBe(false);
+    expect(meta.calls.some((one) => one.method === "onCloudApi")).toBe(true);
+    const [installation] = await kept.installations();
+    expect(installation?.pin).toBeUndefined();
+    expect(installation?.ownApp).toBeUndefined();
   });
 
   it("replaces the old installation when the same number is connected again", async () => {

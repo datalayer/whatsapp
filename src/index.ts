@@ -86,6 +86,7 @@ const routes: Routes =
     : {
         ...webhookRoutes({
           appSecret: config.DATALAYER_WHATSAPP_APP_SECRET,
+          cipher,
           logger,
           queue,
           store,
@@ -98,6 +99,7 @@ const routes: Routes =
           logger,
           port,
           store,
+          verifyToken: config.DATALAYER_WHATSAPP_VERIFY_TOKEN,
           webUrl: config.DATALAYER_WEB_URL,
           window,
         }),

@@ -27,6 +27,7 @@ import {
   webhook,
 } from "../support/meta.js";
 import { RecordingQueue } from "../support/queue.js";
+import { testCipher } from "../support/worker.js";
 
 /**
  * Meta's webhook on a real socket: the endpoint verification, the signature
@@ -56,6 +57,7 @@ describe("the webhook on a real socket", () => {
     const served = await serve(
       webhookRoutes({
         appSecret: APP_SECRET,
+        cipher: testCipher(),
         logger,
         queue,
         store,
@@ -324,6 +326,7 @@ describe.runIf(Boolean(DATABASE_URL))("the webhook on PostgreSQL", () => {
     const served = await serve(
       webhookRoutes({
         appSecret: APP_SECRET,
+        cipher: testCipher(),
         logger: capturingLogger().logger,
         queue,
         store,

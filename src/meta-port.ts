@@ -84,6 +84,29 @@ export type BusinessAppSync = (typeof BUSINESS_APP_SYNCS)[number];
 /** A number of a business account, by its id and verified name; never its phone number. */
 export type BusinessNumber = Readonly<{ id: string; verifiedName: string }>;
 
+/** A business's own Meta app (WA-48): its id and its secret. */
+export type OwnApp = Readonly<{ id: string; secret: string }>;
+
+/** What Meta's debug_token says of an access token. */
+export type TokenGrant = Readonly<{
+  /** The app the token was made for. */
+  appId: string;
+  valid: boolean;
+  /** Its permissions, as Meta names them. */
+  scopes: readonly string[];
+  /**
+   * The business accounts its `whatsapp_business_management` permission
+   * reaches, newest first (the granular scope's target ids).
+   */
+  accounts: readonly string[];
+}>;
+
+/** The two permissions a business's own system user token needs. */
+export const OWN_APP_SCOPES = [
+  "whatsapp_business_messaging",
+  "whatsapp_business_management",
+] as const;
+
 /** Meta's error codes the service acts on. */
 export const META_CODES = {
   /** The access token is invalid or was revoked: the installation is gone. */
@@ -94,6 +117,8 @@ export const META_CODES = {
   outsideWindow: 131047,
   /** The template exists already in the account. */
   templateExists: 2388024,
+  /** The number has a two-step verification PIN, and it is not the one given. */
+  pinMismatch: 133005,
 } as const;
 
 /** What Meta refused, with its code: never the request's token or body. */
@@ -148,6 +173,20 @@ export interface MetaPort {
    * say it.
    */
   grantedAccounts(token: string): Promise<string[]>;
+  /**
+   * A token made by a business's own app (WA-48), read by Meta's
+   * debug_token with that app's own token (`<id>|<secret>`, as a bearer):
+   * the app it belongs to, whether it is valid, its permissions and the
+   * business accounts it reaches. Refused when the id and secret are not
+   * an app's.
+   */
+  tokenOf(app: OwnApp, token: string): Promise<TokenGrant>;
+  /**
+   * Whether the number is registered on the Cloud API already (its
+   * `platform_type` is `CLOUD_API`): it is then not registered again,
+   * which would need the PIN it was registered with.
+   */
+  onCloudApi(token: string, phoneNumberId: string): Promise<boolean>;
   /** The numbers of a business account. */
   numbers(token: string, wabaId: string): Promise<BusinessNumber[]>;
   /** Datalayer's app subscribed to the account's webhooks, or no longer. */
@@ -493,19 +532,23 @@ export class HttpMetaPort implements MetaPort {
     return answered.access_token;
   }
 
-  async grantedAccounts(token: string): Promise<string[]> {
+  /** Meta's debug_token for `token`, asked with an app's own token (`<id>|<secret>`). */
+  async #debug(what: string, app: OwnApp, token: string): Promise<TokenGrant> {
     const answered = await this.#call(
-      "The signup's grants were not read",
+      what,
       "/debug_token",
       {
         query: { input_token: token },
-        // The app's own token (id|secret), as debug_token asks.
-        token: `${this.#options.appId}|${this.#options.appSecret}`,
+        // The app's own token in the header, never its secret in the address.
+        token: `${app.id}|${app.secret}`,
       },
       z
         .object({
           data: z
             .object({
+              app_id: z.string().optional(),
+              is_valid: z.boolean().optional(),
+              scopes: z.array(z.string()).optional(),
               granular_scopes: z
                 .array(
                   z
@@ -524,7 +567,37 @@ export class HttpMetaPort implements MetaPort {
     const management = (answered.data.granular_scopes ?? []).find(
       (one) => one.scope === "whatsapp_business_management",
     );
-    return (management?.target_ids ?? []).filter((id) => /^\d{1,32}$/.test(id));
+    return {
+      accounts: (management?.target_ids ?? []).filter((id) =>
+        /^\d{1,32}$/.test(id),
+      ),
+      appId: answered.data.app_id ?? "",
+      scopes: answered.data.scopes ?? [],
+      valid: answered.data.is_valid === true,
+    };
+  }
+
+  async grantedAccounts(token: string): Promise<string[]> {
+    const grant = await this.#debug(
+      "The signup's grants were not read",
+      { id: this.#options.appId, secret: this.#options.appSecret },
+      token,
+    );
+    return [...grant.accounts];
+  }
+
+  async tokenOf(app: OwnApp, token: string): Promise<TokenGrant> {
+    return this.#debug("The app's token was not read", app, token);
+  }
+
+  async onCloudApi(token: string, phoneNumberId: string): Promise<boolean> {
+    const answered = await this.#call(
+      "The number's registration was not read",
+      `/${encodeURIComponent(phoneNumberId)}`,
+      { query: { fields: "platform_type" }, token },
+      z.object({ platform_type: z.string().optional() }).loose(),
+    );
+    return answered.platform_type === "CLOUD_API";
   }
 
   async numbers(token: string, wabaId: string): Promise<BusinessNumber[]> {

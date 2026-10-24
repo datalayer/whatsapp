@@ -134,11 +134,34 @@ export type Installation = Readonly<{
   privacy: string;
   state: InstallationState;
   removedAt?: Date;
+  /**
+   * Connected with the business's own Meta app (WA-48), not through
+   * Datalayer's Embedded Signup: the app's id, the key of its webhook
+   * address (`/whatsapp/webhook/<key>`) and its secret, which signs that
+   * address's webhooks. Its business token is the app's system user token.
+   * A removed installation keeps the app's id only.
+   */
+  ownApp?: OwnAppInstallation;
+}>;
+
+/**
+ * Which Meta app an installation's webhooks come through: the business's
+ * own (its id), or Datalayer's (Embedded Signup). A business account's
+ * subscription to an app is ended only when no other number of the
+ * account is kept through the same app.
+ */
+export const appOf = (installation: Pick<Installation, "ownApp">): string =>
+  installation.ownApp ? `own:${installation.ownApp.appId}` : "datalayer";
+
+export type OwnAppInstallation = Readonly<{
+  appId: string;
+  webhookKey?: string;
+  appSecret?: EncryptedSecret;
 }>;
 
 /** What each secret of an installation is bound to (its associated data). */
 export const installationData = (
-  what: "host-key" | "business-token" | "pin" | "delivery",
+  what: "host-key" | "business-token" | "pin" | "delivery" | "app-secret",
   wabaId: string,
   phoneNumberId: string,
 ): string => `${what}:${wabaId}:${phoneNumberId}`;
@@ -257,6 +280,8 @@ export interface WhatsAppStore {
     phoneNumberId: string,
   ): Promise<Installation | undefined>;
   installationByHost(hostUid: string): Promise<Installation | undefined>;
+  /** The installation a business's own app's webhook address names (WA-48). */
+  installationByWebhookKey(key: string): Promise<Installation | undefined>;
   installations(state?: InstallationState): Promise<Installation[]>;
   /** Pause or resume: `false` for an unknown or removed installation. */
   setInstallationState(
@@ -579,6 +604,14 @@ export class MemoryStore implements WhatsAppStore {
     );
   }
 
+  async installationByWebhookKey(
+    key: string,
+  ): Promise<Installation | undefined> {
+    return [...this.#installations.values()].find(
+      (one) => one.ownApp?.webhookKey === key,
+    );
+  }
+
   async installations(state?: InstallationState): Promise<Installation[]> {
     return [...this.#installations.values()].filter(
       (one) => !state || one.state === state,
@@ -610,7 +643,13 @@ export class MemoryStore implements WhatsAppStore {
       ...rest
     } = kept;
     void [_token, _secret, _pin];
-    await this.saveInstallation({ ...rest, removedAt: at, state: "removed" });
+    await this.saveInstallation({
+      ...rest,
+      // The app's id stays; its secret and webhook address go.
+      ...(rest.ownApp ? { ownApp: { appId: rest.ownApp.appId } } : {}),
+      removedAt: at,
+      state: "removed",
+    });
     return true;
   }
 

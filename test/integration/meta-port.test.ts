@@ -246,4 +246,56 @@ describe("the Graph API port", () => {
       sync_type: "history",
     });
   });
+
+  it("reads a business's own app's token with that app's own token, and whether a number is on the Cloud API", async () => {
+    const { port, seen } = await setup([
+      {
+        body: {
+          data: {
+            app_id: "2000000000000002",
+            granular_scopes: [
+              {
+                scope: "whatsapp_business_management",
+                target_ids: [WABA],
+              },
+            ],
+            is_valid: true,
+            scopes: [
+              "whatsapp_business_messaging",
+              "whatsapp_business_management",
+            ],
+          },
+        },
+        status: 200,
+      },
+      {
+        body: { id: PHONE_NUMBER_ID, platform_type: "CLOUD_API" },
+        status: 200,
+      },
+      {
+        body: { id: PHONE_NUMBER_ID, platform_type: "NOT_APPLICABLE" },
+        status: 200,
+      },
+      { body: { error: { code: 190 } }, status: 400 },
+    ]);
+    const own = { id: "2000000000000002", secret: "own-test-only-secret" };
+    expect(await port.tokenOf(own, TOKEN)).toEqual({
+      accounts: [WABA],
+      appId: "2000000000000002",
+      scopes: ["whatsapp_business_messaging", "whatsapp_business_management"],
+      valid: true,
+    });
+    expect(seen[0]!.auth).toBe("Bearer 2000000000000002|own-test-only-secret");
+    expect(seen[0]!.path).not.toContain("own-test-only-secret");
+    expect(await port.onCloudApi(TOKEN, PHONE_NUMBER_ID)).toBe(true);
+    expect(new URL(`http://x${seen[1]!.path}`).searchParams.get("fields")).toBe(
+      "platform_type",
+    );
+    expect(seen[1]!.auth).toBe(`Bearer ${TOKEN}`);
+    expect(await port.onCloudApi(TOKEN, PHONE_NUMBER_ID)).toBe(false);
+    await expect(port.tokenOf(own, TOKEN)).rejects.toMatchObject({
+      code: 190,
+      what: "The app's token was not read",
+    });
+  });
 });

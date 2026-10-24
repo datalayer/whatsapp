@@ -9,6 +9,7 @@ import { z } from "zod";
 import { externalIdOf } from "./domain.js";
 import type { MetaPort } from "./meta-port.js";
 import {
+  appOf,
   installationData,
   type Installation,
   type WhatsAppStore,
@@ -22,7 +23,8 @@ import {
  * business token (code 190) on use. Each path marks the installation
  * removed once — the business token and PIN destroyed at once — revokes it
  * at Datalayer (`DELETE /apps/hosts/self`), takes Datalayer's app off the
- * business account's webhooks when no other number of the account is kept,
+ * business account's webhooks (or the business's own app, WA-48) when no
+ * other number of the account is kept through the same app,
  * and the purge deletes every row of the number 24 hours later. Late work
  * of a removed number (a queued message, a delivery, a press) does nothing.
  * The number stays the business's.
@@ -95,7 +97,8 @@ export async function removeInstallation(
     (one) =>
       one.wabaId === wabaId &&
       one.phoneNumberId !== phoneNumberId &&
-      one.state !== "removed",
+      one.state !== "removed" &&
+      appOf(one) === appOf(installation),
   );
   if (token && why !== "account-update" && why !== "token-refused" && !others)
     try {

@@ -24,6 +24,9 @@ import {
   type MetaPort,
   type Outgoing,
   type TemplateState,
+  OWN_APP_SCOPES,
+  type OwnApp,
+  type TokenGrant,
 } from "../../src/meta-port.js";
 import { Metrics } from "../../src/observability.js";
 import {
@@ -56,6 +59,8 @@ export const testCipher = (): SecretCipher =>
 
 export const HOST_KEY = "dlhk_test-only-host-key";
 export const BUSINESS_TOKEN = "EAAtest-only-business-token";
+/** A business's own Meta app's id (WA-48). */
+export const OWN_APP_ID = "2000000000000002";
 
 /** One call Meta's fake saw. */
 export type MetaCall = Readonly<{
@@ -170,6 +175,27 @@ export class FakeMeta implements MetaPort {
   async grantedAccounts(token: string): Promise<string[]> {
     this.#record({ method: "grantedAccounts", token });
     return this.grantedOf;
+  }
+
+  /** What debug_token says of a business's own app's token (WA-48). */
+  tokenGrant: TokenGrant = {
+    accounts: [WABA],
+    appId: OWN_APP_ID,
+    scopes: [...OWN_APP_SCOPES],
+    valid: true,
+  };
+
+  async tokenOf(app: OwnApp, token: string): Promise<TokenGrant> {
+    this.#record({ detail: app.id, method: "tokenOf", token });
+    return this.tokenGrant;
+  }
+
+  /** Whether the number is on the Cloud API already. */
+  registered = false;
+
+  async onCloudApi(token: string, phoneNumberId: string): Promise<boolean> {
+    this.#record({ method: "onCloudApi", phoneNumberId, token });
+    return this.registered;
   }
 
   async syncBusinessApp(

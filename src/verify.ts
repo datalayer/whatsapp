@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
 /**
@@ -77,4 +77,26 @@ export function sameSecret(given: string, expected: string): boolean {
   const a = createHmac("sha256", "compare").update(given).digest();
   const b = createHmac("sha256", "compare").update(expected).digest();
   return timingSafeEqual(a, b);
+}
+
+/**
+ * A business's own Meta app (WA-48) sends its webhooks to its own address,
+ * `/whatsapp/webhook/<key>`: the key, 24 unguessable characters, names the
+ * installation, so its POSTs are checked with that app's secret alone.
+ */
+export const newWebhookKey = (): string =>
+  randomBytes(18).toString("base64url");
+
+/** What a webhook key looks like: never anything else is read as one. */
+export const WEBHOOK_KEY = /^[A-Za-z0-9_-]{24}$/;
+
+/**
+ * The verify token Meta must echo for a webhook key: derived from the
+ * service's own verify token, so a key answers Meta's verification before
+ * its number is connected and nothing is kept for it.
+ */
+export function verifyTokenOf(serviceVerifyToken: string, key: string): string {
+  return createHmac("sha256", serviceVerifyToken)
+    .update(`own-app-webhook:${key}`)
+    .digest("base64url");
 }

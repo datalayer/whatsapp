@@ -1,5 +1,6 @@
 import type {
   Logger,
+  SecretCipher,
   WorkQueue,
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
 import { createHash } from "node:crypto";
@@ -9,6 +10,7 @@ import { z } from "zod";
 import { PHONE_FIELDS } from "./observability.js";
 import type { Routes } from "./server.js";
 import {
+  installationData,
   MESSAGE_STATUSES,
   type MessageStatus,
   type StatusUpdate,
@@ -20,6 +22,8 @@ import {
   rawBodyOf,
   sameSecret,
   signedByMeta,
+  verifyTokenOf,
+  WEBHOOK_KEY,
 } from "./verify.js";
 
 /**
@@ -35,6 +39,18 @@ import {
  *   retries for days, and says its retries may duplicate) claims nothing and
  *   is answered 200. Anything not persisted answers 500, so that Meta tries
  *   again; what was persisted before is claimed already, and stays once.
+ *
+ * A business that connected its number with its own Meta app (WA-48) points
+ * that app at its own address, `/whatsapp/webhook/<key>`:
+ *
+ * - `GET /whatsapp/webhook/<key>`: answered when `hub.verify_token` is the
+ *   one derived for the key (`verifyTokenOf`), before the number is
+ *   connected too, since Meta verifies the address when it is saved.
+ * - `POST /whatsapp/webhook/<key>`: 404 for a key no kept installation has;
+ *   the signature checked with that installation's own app secret alone
+ *   (401 for any other, Datalayer's included); then only the entries of the
+ *   installation's own business account are read, so that a business's
+ *   app speaks for its own account and no other.
  *
  * The ingress never calls Meta or Datalayer: the worker does. It drops every
  * phone number Meta sends (the sender's, a contact's, a status's recipient)
@@ -98,6 +114,12 @@ export const ACCOUNT_FIELDS = [
   "phone_number_quality_update",
   "template_category_update",
 ] as const;
+
+/**
+ * The webhook fields a business's own app subscribes (WA-48), as Datalayer's
+ * app does: the messages and their statuses, and the account's events.
+ */
+export const WEBHOOK_FIELDS = ["messages", ...ACCOUNT_FIELDS] as const;
 
 const id = z.string().min(1).max(512);
 const media = z
@@ -355,31 +377,83 @@ export function normalize(body: unknown): Normalized {
 export type WebhookDependencies = Readonly<{
   appSecret: string;
   verifyToken: string;
+  /** What opens a business's own app secret (WA-48). */
+  cipher: Pick<SecretCipher, "decrypt">;
   queue: Pick<WorkQueue<WhatsAppJob>, "enqueue">;
   store: WhatsAppStore;
   logger: Logger;
 }>;
 
-/** `GET` and `POST /whatsapp/webhook`. */
+/** The webhook key of a request on `/whatsapp/webhook/:key`, when it is one. */
+const keyOf = (request: IncomingMessage): string | undefined => {
+  const key = (request as IncomingMessage & { params?: Record<string, string> })
+    .params?.key;
+  return key && WEBHOOK_KEY.test(key) ? key : undefined;
+};
+
+/** `GET` and `POST /whatsapp/webhook`, and each own app's `/whatsapp/webhook/<key>`. */
 export function webhookRoutes(dependencies: WebhookDependencies): Routes {
   return {
     [`GET ${WEBHOOK_PATH}`]: async (request, response) =>
-      verification(dependencies, request, response),
+      verification(dependencies, request, response, dependencies.verifyToken),
     [`POST ${WEBHOOK_PATH}`]: async (request, response) =>
-      receive(dependencies, request, response),
+      receive(dependencies, request, response, dependencies.appSecret),
+    [`GET ${WEBHOOK_PATH}/:key`]: async (request, response) => {
+      const key = keyOf(request);
+      if (!key) return notFound(response);
+      verification(
+        dependencies,
+        request,
+        response,
+        verifyTokenOf(dependencies.verifyToken, key),
+      );
+    },
+    [`POST ${WEBHOOK_PATH}/:key`]: async (request, response) => {
+      const key = keyOf(request);
+      const installation = key
+        ? await dependencies.store.installationByWebhookKey(key)
+        : undefined;
+      const sealed = installation?.ownApp?.appSecret;
+      if (!installation || installation.state === "removed" || !sealed) {
+        dependencies.logger.warn("webhook.unknown_address", {});
+        request.resume();
+        return notFound(response);
+      }
+      const appSecret = dependencies.cipher.decrypt(
+        sealed,
+        installationData(
+          "app-secret",
+          installation.wabaId,
+          installation.phoneNumberId,
+        ),
+      );
+      await receive(
+        dependencies,
+        request,
+        response,
+        appSecret,
+        installation.wabaId,
+      );
+    },
   };
+}
+
+function notFound(response: ServerResponse): void {
+  response.writeHead(404);
+  response.end();
 }
 
 function verification(
   dependencies: WebhookDependencies,
   request: IncomingMessage,
   response: ServerResponse,
+  verifyToken: string,
 ): void {
   const query = new URL(request.url ?? "/", "http://localhost").searchParams;
   const challenge = query.get("hub.challenge") ?? "";
   if (
     query.get("hub.mode") === "subscribe" &&
-    sameSecret(query.get("hub.verify_token") ?? "", dependencies.verifyToken) &&
+    sameSecret(query.get("hub.verify_token") ?? "", verifyToken) &&
     /^[\x21-\x7e]{1,256}$/.test(challenge)
   ) {
     response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
@@ -391,10 +465,36 @@ function verification(
   response.end();
 }
 
+/**
+ * A body's entries of one business account only: what a business's own app
+ * may speak for. The rest is set aside, counted by the caller.
+ */
+export function onlyAccount(
+  body: unknown,
+  wabaId: string,
+): { body: unknown; foreign: number } {
+  if (!body || typeof body !== "object") return { body, foreign: 0 };
+  const entries = (body as { entry?: unknown }).entry;
+  if (!Array.isArray(entries)) return { body, foreign: 0 };
+  const kept = entries.filter(
+    (one: unknown) =>
+      !!one &&
+      typeof one === "object" &&
+      (one as { id?: unknown }).id === wabaId,
+  );
+  return {
+    body: { ...body, entry: kept },
+    foreign: entries.length - kept.length,
+  };
+}
+
 async function receive(
   dependencies: WebhookDependencies,
   request: IncomingMessage,
   response: ServerResponse,
+  appSecret: string,
+  /** A business's own app: only this account's entries are read. */
+  onlyWabaId?: string,
 ): Promise<void> {
   const send = (status: number) => {
     response.writeHead(status);
@@ -413,13 +513,25 @@ async function receive(
     }
     throw error;
   }
-  if (!signedByMeta(request, rawBody, dependencies.appSecret)) {
-    dependencies.logger.warn("webhook.unsigned", { size: rawBody.length });
+  if (!signedByMeta(request, rawBody, appSecret)) {
+    dependencies.logger.warn("webhook.unsigned", {
+      size: rawBody.length,
+      own_app: onlyWabaId !== undefined,
+    });
     return send(401);
   }
   let normalized: Normalized;
   try {
-    normalized = normalize(JSON.parse(rawBody.toString("utf8")) as unknown);
+    let body = JSON.parse(rawBody.toString("utf8")) as unknown;
+    if (onlyWabaId !== undefined) {
+      const only = onlyAccount(body, onlyWabaId);
+      if (only.foreign)
+        dependencies.logger.warn("webhook.foreign_account", {
+          entries: only.foreign,
+        });
+      body = only.body;
+    }
+    normalized = normalize(body);
   } catch {
     dependencies.logger.error("webhook.malformed", { size: rawBody.length });
     return send(400);
