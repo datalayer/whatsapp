@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { PostgresStore } from "../../src/postgres-store.js";
 import { MemoryStore, wamidHash, type WhatsAppStore } from "../../src/store.js";
-import { BODY_LIMIT } from "../../src/verify.js";
+import { BODY_LIMIT, verifyTokenOf } from "../../src/verify.js";
 import {
   webhookRoutes,
   WEBHOOK_PATH,
@@ -15,23 +15,33 @@ import {
 import {
   ALICE,
   ALICE_PHONE,
-  APP_SECRET,
   BUSINESS_PHONE,
   capturingLogger,
   message,
   PHONE_NUMBER_ID,
   serve,
   sign,
-  VERIFY_TOKEN,
+  VERIFY_SECRET,
   WABA,
   webhook,
 } from "../support/meta.js";
 import { RecordingQueue } from "../support/queue.js";
-import { testCipher } from "../support/worker.js";
+import {
+  APP_ID,
+  installation,
+  testCipher,
+  webhookKeyOf,
+} from "../support/worker.js";
+
+/** The installation's own address, and its verify token. */
+const KEY = webhookKeyOf();
+const ADDRESS = `${WEBHOOK_PATH}/${KEY}`;
+const VERIFY_TOKEN = verifyTokenOf(VERIFY_SECRET, KEY);
 
 /**
- * Meta's webhook on a real socket: the endpoint verification, the signature
- * over the raw body, the 3 MB cap, each message claimed once by its wamid,
+ * Meta's webhook on a real socket, at an installation's own address: the
+ * endpoint verification, the signature with its app's secret over the raw
+ * body, the 3 MB cap, each message claimed once by its wamid,
  * statuses kept as each message's furthest, 200 at once, and 500 when
  * nothing could be persisted, so that Meta tries again.
  */
@@ -54,21 +64,22 @@ describe("the webhook on a real socket", () => {
     store: WhatsAppStore = new MemoryStore(),
   ): Promise<Endpoint> {
     const { lines, logger } = capturingLogger();
+    const cipher = testCipher();
+    await store.saveInstallation(installation(cipher));
     const served = await serve(
       webhookRoutes({
-        appSecret: APP_SECRET,
-        cipher: testCipher(),
+        cipher,
         logger,
         queue,
         store,
-        verifyToken: VERIFY_TOKEN,
+        verifySecret: VERIFY_SECRET,
       }),
     );
     close = served.close;
     return {
       lines,
       post: (body, signature = sign(body)) =>
-        fetch(`${served.url}${WEBHOOK_PATH}`, {
+        fetch(`${served.url}${ADDRESS}`, {
           body,
           headers: {
             "content-type": "application/json",
@@ -84,7 +95,7 @@ describe("the webhook on a real socket", () => {
     const { url } = await endpoint(new RecordingQueue());
     const verify = (mode: string, token: string, challenge = "1158201444") =>
       fetch(
-        `${url}${WEBHOOK_PATH}?hub.mode=${mode}&hub.verify_token=${encodeURIComponent(token)}&hub.challenge=${challenge}`,
+        `${url}${ADDRESS}?hub.mode=${mode}&hub.verify_token=${encodeURIComponent(token)}&hub.challenge=${challenge}`,
       );
     const answered = await verify("subscribe", VERIFY_TOKEN);
     expect(answered.status).toBe(200);
@@ -94,7 +105,24 @@ describe("the webhook on a real socket", () => {
     );
     expect((await verify("unsubscribe", VERIFY_TOKEN)).status).toBe(403);
     expect((await verify("subscribe", VERIFY_TOKEN, "")).status).toBe(403);
-    expect((await fetch(`${url}${WEBHOOK_PATH}`)).status).toBe(403);
+    expect((await fetch(`${url}${ADDRESS}`)).status).toBe(403);
+    // The verify secret itself is no address's verify token.
+    expect((await verify("subscribe", VERIFY_SECRET)).status).toBe(403);
+  });
+
+  it("serves no shared address: Datalayer has no Meta app", async () => {
+    const { url } = await endpoint(new RecordingQueue());
+    const body = webhook({ messages: [message("wamid.N1")] });
+    expect((await fetch(`${url}${WEBHOOK_PATH}`)).status).toBe(404);
+    expect(
+      (
+        await fetch(`${url}${WEBHOOK_PATH}`, {
+          body,
+          headers: { "x-hub-signature-256": sign(body) },
+          method: "POST",
+        })
+      ).status,
+    ).toBe(404);
   });
 
   it("claims a valid message once, without a phone number, and answers 200", async () => {
@@ -277,6 +305,7 @@ describe("the webhook on a real socket", () => {
     expect((await post(update)).status).toBe(200);
     expect(queue.items).toHaveLength(1);
     expect(queue.items[0]?.item).toEqual({
+      appId: APP_ID,
       field: "account_update",
       kind: "account",
       value: { event: "PARTNER_REMOVED", waba_info: { waba_id: WABA } },
@@ -323,19 +352,20 @@ describe.runIf(Boolean(DATABASE_URL))("the webhook on PostgreSQL", () => {
   it("claims each message once and keeps its job with its claim", async () => {
     const queue = new PostgresWorkQueue<WhatsAppJob>(database, "whatsapp");
     const store = new PostgresStore(database);
+    const cipher = testCipher();
+    await store.saveInstallation(installation(cipher));
     const served = await serve(
       webhookRoutes({
-        appSecret: APP_SECRET,
-        cipher: testCipher(),
+        cipher,
         logger: capturingLogger().logger,
         queue,
         store,
-        verifyToken: VERIFY_TOKEN,
+        verifySecret: VERIFY_SECRET,
       }),
     );
     close = served.close;
     const post = (body: string) =>
-      fetch(`${served.url}${WEBHOOK_PATH}`, {
+      fetch(`${served.url}${ADDRESS}`, {
         body,
         headers: { "x-hub-signature-256": sign(body) },
         method: "POST",

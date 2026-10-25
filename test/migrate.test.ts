@@ -29,6 +29,7 @@ describe.runIf(Boolean(DATABASE_URL))("migrate on PostgreSQL", () => {
     execFileSync("node", ["--import", "tsx", "scripts/migrate.ts"], {
       encoding: "utf8",
       env: { ...process.env, DATABASE_URL },
+      stdio: "pipe",
     });
 
   it("makes the shared tables and the WhatsApp ones, and is idempotent", async () => {
@@ -54,6 +55,56 @@ describe.runIf(Boolean(DATABASE_URL))("migrate on PostgreSQL", () => {
     );
     migrate();
     expect(await tables()).toEqual(first);
+  }, 60_000);
+
+  it("refuses a number still connected through Datalayer's former Embedded Signup, then purges a removed one and drops the way", async () => {
+    // The schema as 0.1.3 left it: each installation named its way.
+    await database.query(`
+      ALTER TABLE whatsapp_installation DROP CONSTRAINT whatsapp_installation_app_columns;
+      ALTER TABLE whatsapp_installation ALTER COLUMN app_id DROP NOT NULL;
+      ALTER TABLE whatsapp_installation ADD COLUMN way text NOT NULL DEFAULT 'embedded_signup';
+      INSERT INTO whatsapp_installation (waba_id, phone_number_id, host_uid, host_key,
+        organization_uid, business_name, support, privacy, state)
+      VALUES ('1', '11', 'host-11', '{}', 'account-1', 'Acme', 'support@acme.example',
+        'https://acme.example/privacy', 'active');
+      INSERT INTO whatsapp_chat (phone_number_id, user_id, waba_id, last_inbound_at)
+      VALUES ('11', 'US.1', '1', now());`);
+    expect(migrate).toThrow(/still connected/);
+    // Nothing was changed by the refused migration.
+    expect(
+      (await database.query("SELECT way FROM whatsapp_installation")).rows,
+    ).toEqual([{ way: "embedded_signup" }]);
+    await database.query(
+      "UPDATE whatsapp_installation SET state = 'removed', removed_at = now()",
+    );
+    migrate();
+    expect(
+      (await database.query("SELECT * FROM whatsapp_installation")).rows,
+    ).toEqual([]);
+    expect((await database.query("SELECT * FROM whatsapp_chat")).rows).toEqual(
+      [],
+    );
+    expect(
+      (
+        await database.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'whatsapp_installation' AND column_name = 'way'",
+        )
+      ).rows,
+    ).toEqual([]);
+    // Every installation names its app, and a kept one its secret and address.
+    await expect(
+      database.query(`INSERT INTO whatsapp_installation (waba_id, phone_number_id,
+        host_uid, host_key, organization_uid, business_name, support, privacy, state)
+        VALUES ('1', '12', 'host-12', '{}', 'account-1', 'Acme', 'support@acme.example',
+        'https://acme.example/privacy', 'active')`),
+    ).rejects.toThrow(/app_id/);
+    await expect(
+      database.query(`INSERT INTO whatsapp_installation (waba_id, phone_number_id,
+        host_uid, host_key, organization_uid, business_name, support, privacy, state, app_id)
+        VALUES ('1', '12', 'host-12', '{}', 'account-1', 'Acme', 'support@acme.example',
+        'https://acme.example/privacy', 'active', '2')`),
+    ).rejects.toThrow(/whatsapp_installation_app_columns/);
+    migrate();
   }, 60_000);
 
   it("keeps a message's furthest status and never steps back", async () => {

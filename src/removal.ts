@@ -9,7 +9,6 @@ import { z } from "zod";
 import { externalIdOf } from "./domain.js";
 import type { MetaPort } from "./meta-port.js";
 import {
-  appOf,
   installationData,
   type Installation,
   type WhatsAppStore,
@@ -18,14 +17,15 @@ import {
 /**
  * Disconnect and removal. A number stops being answered when its owner
  * disconnects it in Datalayer (its host key is then refused: found on use,
- * and by the daily reconciliation), when the business removes Datalayer
- * from its account at Meta (`account_update`), or when Meta refuses the
- * business token (code 190) on use. Each path marks the installation
- * removed once — the business token and PIN destroyed at once — revokes it
- * at Datalayer (`DELETE /apps/hosts/self`), takes Datalayer's app off the
- * business account's webhooks (or the business's own app, WA-48) when no
- * other number of the account is kept through the same app,
- * and the purge deletes every row of the number 24 hours later. Late work
+ * and by the daily reconciliation), when the business ends its app's access
+ * to the account at Meta (`account_update`, as it comes to that app's
+ * address), or when Meta refuses the business token (code 190) on use. Each
+ * path marks the installation removed once — the business token, the PIN,
+ * the app's secret and webhook address destroyed at once — revokes it at
+ * Datalayer (`DELETE /apps/hosts/self`), takes the installation's app off
+ * the business account's webhooks when no other number of the account is
+ * kept through the same app, and the purge deletes every row of the number
+ * 24 hours later. Late work
  * of a removed number (a queued message, a delivery, a press) does nothing.
  * The number stays the business's.
  */
@@ -33,7 +33,7 @@ import {
 /** The audited grace before a removed number's rows are deleted. */
 export const PURGE_AFTER_MS = 24 * 60 * 60 * 1000;
 
-/** `account_update` events that end Datalayer's access to a business account. */
+/** `account_update` events that end an app's access to a business account. */
 export const REMOVAL_EVENTS: ReadonlySet<string> = new Set([
   "PARTNER_REMOVED",
   "PARTNER_APP_UNINSTALLED",
@@ -98,7 +98,7 @@ export async function removeInstallation(
       one.wabaId === wabaId &&
       one.phoneNumberId !== phoneNumberId &&
       one.state !== "removed" &&
-      appOf(one) === appOf(installation),
+      one.app.appId === installation.app.appId,
   );
   if (token && why !== "account-update" && why !== "token-refused" && !others)
     try {
@@ -116,12 +116,14 @@ export async function removeInstallation(
 const accountUpdateSchema = z.object({ event: z.string() }).loose();
 
 /**
- * Meta's `account_update` for a business account: an event that ends
- * Datalayer's access removes every number of the account. Answers how many.
+ * Meta's `account_update` for a business account, as it came to an app's
+ * address: an event that ends the access removes every number of the
+ * account kept through that app, and no other app's. Answers how many.
  */
 export async function accountUpdated(
   dependencies: RemovalDependencies,
   wabaId: string,
+  appId: string,
   value: unknown,
 ): Promise<number> {
   const update = accountUpdateSchema.safeParse(value);
@@ -131,6 +133,7 @@ export async function accountUpdated(
   for (const installation of await dependencies.store.installations())
     if (
       installation.wabaId === wabaId &&
+      installation.app.appId === appId &&
       installation.state !== "removed" &&
       (await removeInstallation(dependencies, installation, "account-update"))
     )

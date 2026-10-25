@@ -5,6 +5,7 @@ import { approvalPressId } from "../../src/render.js";
 import { ALICE, PHONE_NUMBER_ID, WABA } from "../support/meta.js";
 import { storeCases } from "../support/stores.js";
 import {
+  APP_ID,
   harness,
   HOST_KEY,
   installation,
@@ -14,7 +15,8 @@ import {
 } from "../support/worker.js";
 
 /**
- * Disconnect and removal, on each store: Meta's `account_update`, a token
+ * Disconnect and removal, on each store: Meta's `account_update` (for the
+ * numbers of the app it came through only), a token
  * Meta refuses on use (190), a host key Datalayer refuses (the owner
  * disconnected it on the card; found on use and by the daily
  * reconciliation). The business token goes at once; late work does
@@ -34,17 +36,48 @@ const removalOf = (h: Harness) => ({
 });
 
 describe.each(storeCases())("removal on $name", ({ store, database }) => {
-  it("removes every number of an account Meta says Datalayer left, the token destroyed", async () => {
+  it("removes every number of an account Meta says the app left, the token destroyed, and no other app's", async () => {
     const h = harness(store());
     await h.connect();
+    // Another application's own app on the same business account.
+    await h.store.saveInstallation(
+      installation(h.cipher, {
+        app: {
+          appId: "3000000000000003",
+          appSecret: h.cipher.encrypt(
+            "other-app-secret",
+            `app-secret:${WABA}:3000`,
+          ),
+          webhookKey: "wk-other-app-00000000000",
+        },
+        hostKey: h.cipher.encrypt("dlhk_other", `host-key:${WABA}:3000`),
+        hostUid: "host-3000",
+        phoneNumberId: "3000",
+      }),
+    );
+    // An access ended for another app, on the same account: not this app's.
     await h.worker.handle({
+      appId: "4000000000000004",
+      field: "account_update",
+      kind: "account",
+      value: { event: "PARTNER_APP_UNINSTALLED" },
+      wabaId: WABA,
+    });
+    expect((await h.store.installations()).map((one) => one.state)).toEqual([
+      "active",
+      "active",
+    ]);
+    await h.worker.handle({
+      appId: APP_ID,
       field: "account_update",
       kind: "account",
       value: { event: "PARTNER_REMOVED" },
       wabaId: WABA,
     });
-    const [removed] = await h.store.installations();
+    const removed = await h.store.installation(WABA, PHONE_NUMBER_ID);
     expect(removed?.state).toBe("removed");
+    expect(removed?.app).toEqual({ appId: APP_ID });
+    expect((await h.store.installation(WABA, "3000"))?.state).toBe("active");
     expect(removed?.businessToken).toBeUndefined();
     expect(removed?.pin).toBeUndefined();
     expect(removed?.removedAt?.getTime()).toBe(h.clock.now());
@@ -58,6 +91,7 @@ describe.each(storeCases())("removal on $name", ({ store, database }) => {
     ).toBe(true);
     // Another event changes nothing.
     await h.worker.handle({
+      appId: APP_ID,
       field: "account_update",
       kind: "account",
       value: { event: "VERIFIED_ACCOUNT" },
@@ -113,6 +147,32 @@ describe.each(storeCases())("removal on $name", ({ store, database }) => {
       false,
     );
     expect(await reconcile(removalOf(h))).toBe(0);
+  });
+
+  it("takes the app off the account when the account's other number is another application's app", async () => {
+    const h = harness(store());
+    await h.connect();
+    await h.store.saveInstallation(
+      installation(h.cipher, {
+        app: {
+          appId: "3000000000000003",
+          appSecret: h.cipher.encrypt(
+            "other-app-secret",
+            `app-secret:${WABA}:3000`,
+          ),
+          webhookKey: "wk-other-app-00000000000",
+        },
+        hostKey: h.cipher.encrypt("dlhk_other", `host-key:${WABA}:3000`),
+        hostUid: "host-3000",
+        phoneNumberId: "3000",
+      }),
+    );
+    h.hosts.refusedKeys.add(HOST_KEY);
+    expect(await reconcile(removalOf(h))).toBe(1);
+    expect(
+      h.meta.calls.filter((one) => one.method === "unsubscribe"),
+    ).toHaveLength(1);
+    expect((await h.store.installation(WABA, "3000"))?.state).toBe("active");
   });
 
   it("does nothing with late work: a queued message, a delivery, a press", async () => {

@@ -26,7 +26,7 @@ import { Worker } from "./worker.js";
 
 /**
  * Datalayer for WhatsApp: one process per role. Every role serves its
- * health; the ingress serves Meta's webhook, the install and Datalayer's
+ * health; the ingress serves Meta's webhooks (each application's own Meta app at its installation's address), the install and Datalayer's
  * signed deliveries, persisting before it answers; the worker works the
  * durable queue: turns, words, approvals, deliveries, account events, the
  * outbox, removals and retention.
@@ -39,8 +39,6 @@ const { store, queue, cipher } = resources;
 const role = config.DATALAYER_WHATSAPP_ROLE;
 
 const port = new HttpMetaPort({
-  appId: config.DATALAYER_WHATSAPP_APP_ID,
-  appSecret: config.DATALAYER_WHATSAPP_APP_SECRET,
   clock: systemClock,
   graphUrl: config.DATALAYER_WHATSAPP_GRAPH_URL,
   metrics,
@@ -85,12 +83,11 @@ const routes: Routes =
     ? {}
     : {
         ...webhookRoutes({
-          appSecret: config.DATALAYER_WHATSAPP_APP_SECRET,
           cipher,
           logger,
           queue,
           store,
-          verifyToken: config.DATALAYER_WHATSAPP_VERIFY_TOKEN,
+          verifySecret: config.DATALAYER_WHATSAPP_VERIFY_SECRET,
         }),
         ...installRoutes({
           appUrl: config.DATALAYER_WHATSAPP_APP_URL,
@@ -99,7 +96,7 @@ const routes: Routes =
           logger,
           port,
           store,
-          verifyToken: config.DATALAYER_WHATSAPP_VERIFY_TOKEN,
+          verifySecret: config.DATALAYER_WHATSAPP_VERIFY_SECRET,
           webUrl: config.DATALAYER_WEB_URL,
           window,
         }),

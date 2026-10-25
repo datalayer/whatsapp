@@ -8,18 +8,25 @@ describe("the settings", () => {
     const config = readConfig(ENVIRONMENT);
     expect(config.DATALAYER_WHATSAPP_ROLE).toBe("all");
     expect(config.PORT).toBe(3000);
-    expect(SETTINGS).toContain("DATALAYER_WHATSAPP_APP_SECRET");
+    expect(SETTINGS).toContain("DATALAYER_WHATSAPP_VERIFY_SECRET");
+    // Datalayer has no Meta app: no setting names one.
+    for (const gone of [
+      "DATALAYER_WHATSAPP_APP_ID",
+      "DATALAYER_WHATSAPP_APP_SECRET",
+      "DATALAYER_WHATSAPP_VERIFY_TOKEN",
+    ])
+      expect(SETTINGS).not.toContain(gone);
   });
 
-  it("refuses by name a missing secret and a short verify token", () => {
+  it("refuses by name a missing secret and a short verify secret", () => {
     const missing: Record<string, string | undefined> = { ...ENVIRONMENT };
-    delete missing.DATALAYER_WHATSAPP_APP_SECRET;
+    delete missing.DATALAYER_WHATSAPP_SECRET_KEY;
     expect(() => readConfig(missing)).toThrow(
-      /DATALAYER_WHATSAPP_APP_SECRET: missing/,
+      /DATALAYER_WHATSAPP_SECRET_KEY: missing/,
     );
     expect(() =>
-      readConfig({ ...ENVIRONMENT, DATALAYER_WHATSAPP_VERIFY_TOKEN: "short" }),
-    ).toThrow(/DATALAYER_WHATSAPP_VERIFY_TOKEN: at least 16 characters/);
+      readConfig({ ...ENVIRONMENT, DATALAYER_WHATSAPP_VERIFY_SECRET: "short" }),
+    ).toThrow(/DATALAYER_WHATSAPP_VERIFY_SECRET: at least 32 characters/);
   });
 
   it("keeps production, and every role apart, on PostgreSQL", () => {

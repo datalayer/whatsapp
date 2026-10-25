@@ -90,9 +90,7 @@ jobs:
           # Test values, built here so that no secret scanner takes them for credentials.
           docker run -d --name whatsapp -p 3000:3000 \
             -e NODE_ENV=test -e DATALAYER_WHATSAPP_ROLE=all \
-            -e DATALAYER_WHATSAPP_APP_SECRET="ci-only-$(printf '%s' not-an-app-secret)" \
-            -e DATALAYER_WHATSAPP_VERIFY_TOKEN=ci-only-verify-token \
-            -e DATALAYER_WHATSAPP_APP_ID=1000000000000001 \
+            -e DATALAYER_WHATSAPP_VERIFY_SECRET="ci-only-$(printf '%s' not-a-verify-secret-at-all)" \
             -e DATALAYER_WHATSAPP_SECRET_KEY="$(head -c 32 /dev/zero | base64)" \
             -e DATALAYER_WHATSAPP_APP_URL=https://whatsapp.example.test \
             -e DATALAYER_API_URL=https://datalayer.example.test \

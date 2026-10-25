@@ -77,15 +77,11 @@ export const LIMITS = {
 /** What a template's creation answered: its status and category, as Meta keeps them. */
 export type TemplateState = Readonly<{ status: string; category: string }>;
 
-/** The two syncs Meta asks once of a number kept on the WhatsApp Business app. */
-export const BUSINESS_APP_SYNCS = ["smb_app_state_sync", "history"] as const;
-export type BusinessAppSync = (typeof BUSINESS_APP_SYNCS)[number];
-
 /** A number of a business account, by its id and verified name; never its phone number. */
 export type BusinessNumber = Readonly<{ id: string; verifiedName: string }>;
 
-/** A business's own Meta app (WA-48): its id and its secret. */
-export type OwnApp = Readonly<{ id: string; secret: string }>;
+/** An application developer's own Meta app: its id and its secret. */
+export type MetaApp = Readonly<{ id: string; secret: string }>;
 
 /** What Meta's debug_token says of an access token. */
 export type TokenGrant = Readonly<{
@@ -101,8 +97,8 @@ export type TokenGrant = Readonly<{
   accounts: readonly string[];
 }>;
 
-/** The two permissions a business's own system user token needs. */
-export const OWN_APP_SCOPES = [
+/** The two permissions the app's system user token needs. */
+export const TOKEN_SCOPES = [
   "whatsapp_business_messaging",
   "whatsapp_business_management",
 ] as const;
@@ -164,23 +160,14 @@ export interface MetaPort {
     phoneNumberId: string,
     file: Readonly<{ bytes: Uint8Array; mimeType: string; filename: string }>,
   ): Promise<string>;
-  /** Embedded Signup's code exchanged, server to server, for the business token. */
-  exchangeCode(code: string): Promise<string>;
   /**
-   * The business accounts the signup's business token was granted, newest
-   * first (Meta's debug_token, the `whatsapp_business_management` scope's
-   * target ids): how the account is found when the signup's window did not
-   * say it.
-   */
-  grantedAccounts(token: string): Promise<string[]>;
-  /**
-   * A token made by a business's own app (WA-48), read by Meta's
+   * A system user token of the developer's own app, read by Meta's
    * debug_token with that app's own token (`<id>|<secret>`, as a bearer):
    * the app it belongs to, whether it is valid, its permissions and the
    * business accounts it reaches. Refused when the id and secret are not
    * an app's.
    */
-  tokenOf(app: OwnApp, token: string): Promise<TokenGrant>;
+  tokenOf(app: MetaApp, token: string): Promise<TokenGrant>;
   /**
    * Whether the number is registered on the Cloud API already (its
    * `platform_type` is `CLOUD_API`): it is then not registered again,
@@ -189,21 +176,11 @@ export interface MetaPort {
   onCloudApi(token: string, phoneNumberId: string): Promise<boolean>;
   /** The numbers of a business account. */
   numbers(token: string, wabaId: string): Promise<BusinessNumber[]>;
-  /** Datalayer's app subscribed to the account's webhooks, or no longer. */
+  /** The token's app subscribed to the account's webhooks, or no longer. */
   subscribe(token: string, wabaId: string): Promise<void>;
   unsubscribe(token: string, wabaId: string): Promise<void>;
   /** The number registered for the Cloud API, with its two-step PIN. */
   register(token: string, phoneNumberId: string, pin: string): Promise<void>;
-  /**
-   * A number kept on the WhatsApp Business app (coexistence): Meta's contacts
-   * or history sync asked once, which Meta requires within 24 hours of the
-   * signup. What Meta then sends is not kept by this service.
-   */
-  syncBusinessApp(
-    token: string,
-    phoneNumberId: string,
-    kind: BusinessAppSync,
-  ): Promise<void>;
   /** A template created in the account; one that exists already is read. */
   createTemplate(
     token: string,
@@ -389,8 +366,6 @@ export const PAIR_RETRIES = 2;
 export type HttpMetaPortOptions = Readonly<{
   /** `https://graph.facebook.com/v23.0`: the Graph API and its version. */
   graphUrl: string;
-  appId: string;
-  appSecret: string;
   clock: Pick<Clock, "sleep">;
   metrics: Metrics;
   fetchImplementation?: typeof fetch;
@@ -516,26 +491,10 @@ export class HttpMetaPort implements MetaPort {
     return uploaded.id;
   }
 
-  async exchangeCode(code: string): Promise<string> {
+  /** Meta's debug_token for `token`, asked with the app's own token (`<id>|<secret>`). */
+  async tokenOf(app: MetaApp, token: string): Promise<TokenGrant> {
     const answered = await this.#call(
-      "The signup's code was not exchanged",
-      "/oauth/access_token",
-      {
-        query: {
-          client_id: this.#options.appId,
-          client_secret: this.#options.appSecret,
-          code,
-        },
-      },
-      z.object({ access_token: z.string().min(1) }).loose(),
-    );
-    return answered.access_token;
-  }
-
-  /** Meta's debug_token for `token`, asked with an app's own token (`<id>|<secret>`). */
-  async #debug(what: string, app: OwnApp, token: string): Promise<TokenGrant> {
-    const answered = await this.#call(
-      what,
+      "The app's token was not read",
       "/debug_token",
       {
         query: { input_token: token },
@@ -575,19 +534,6 @@ export class HttpMetaPort implements MetaPort {
       scopes: answered.data.scopes ?? [],
       valid: answered.data.is_valid === true,
     };
-  }
-
-  async grantedAccounts(token: string): Promise<string[]> {
-    const grant = await this.#debug(
-      "The signup's grants were not read",
-      { id: this.#options.appId, secret: this.#options.appSecret },
-      token,
-    );
-    return [...grant.accounts];
-  }
-
-  async tokenOf(app: OwnApp, token: string): Promise<TokenGrant> {
-    return this.#debug("The app's token was not read", app, token);
   }
 
   async onCloudApi(token: string, phoneNumberId: string): Promise<boolean> {
@@ -649,19 +595,6 @@ export class HttpMetaPort implements MetaPort {
       "The number was not registered",
       `/${encodeURIComponent(phoneNumberId)}/register`,
       { json: { messaging_product: "whatsapp", pin }, token },
-      z.unknown(),
-    );
-  }
-
-  async syncBusinessApp(
-    token: string,
-    phoneNumberId: string,
-    kind: BusinessAppSync,
-  ): Promise<void> {
-    await this.#call(
-      "The WhatsApp Business app's sync was not asked",
-      `/${encodeURIComponent(phoneNumberId)}/smb_app_data`,
-      { json: { messaging_product: "whatsapp", sync_type: kind }, token },
       z.unknown(),
     );
   }

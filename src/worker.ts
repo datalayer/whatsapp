@@ -267,6 +267,7 @@ export class Worker {
           store: this.deps.store,
         },
         job.wabaId,
+        job.appId,
         job.value,
       );
       logger.info("account.updated", { removed });

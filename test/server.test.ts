@@ -29,7 +29,7 @@ describe("health and readiness", () => {
     const served = await serve({});
     close = served.close;
     expect(
-      (await fetch(`${served.url}/whatsapp/webhook`, { method: "POST" }))
+      (await fetch(`${served.url}/whatsapp/anything`, { method: "POST" }))
         .status,
     ).toBe(404);
   });

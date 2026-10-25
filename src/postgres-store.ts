@@ -107,15 +107,14 @@ type InstallationRow = {
   privacy: string;
   state: InstallationState;
   removed_at: Date | null;
-  way: "embedded_signup" | "own_app";
-  app_id: string | null;
+  app_id: string;
   app_secret: EncryptedSecret | null;
   webhook_key: string | null;
 };
 
 const INSTALLATION_COLUMNS = `waba_id, phone_number_id, host_uid, host_key, business_token,
   pin, delivery_secret, organization_uid, business_name, support, privacy, state, removed_at,
-  way, app_id, app_secret, webhook_key`;
+  app_id, app_secret, webhook_key`;
 
 function installationOf(row: InstallationRow): Installation {
   return {
@@ -132,15 +131,11 @@ function installationOf(row: InstallationRow): Installation {
     ...(row.pin ? { pin: row.pin } : {}),
     ...(row.delivery_secret ? { deliverySecret: row.delivery_secret } : {}),
     ...(row.removed_at ? { removedAt: row.removed_at } : {}),
-    ...(row.way === "own_app"
-      ? {
-          ownApp: {
-            appId: row.app_id as string,
-            ...(row.webhook_key ? { webhookKey: row.webhook_key } : {}),
-            ...(row.app_secret ? { appSecret: row.app_secret } : {}),
-          },
-        }
-      : {}),
+    app: {
+      appId: row.app_id,
+      ...(row.webhook_key ? { webhookKey: row.webhook_key } : {}),
+      ...(row.app_secret ? { appSecret: row.app_secret } : {}),
+    },
   };
 }
 
@@ -490,7 +485,7 @@ export class PostgresStore implements WhatsAppStore {
   async saveInstallation(installation: Installation): Promise<void> {
     await this.database.query(
       `INSERT INTO whatsapp_installation (${INSTALLATION_COLUMNS})
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        ON CONFLICT (waba_id, phone_number_id) DO UPDATE SET
          host_uid = EXCLUDED.host_uid,
          host_key = EXCLUDED.host_key,
@@ -503,7 +498,6 @@ export class PostgresStore implements WhatsAppStore {
          privacy = EXCLUDED.privacy,
          state = EXCLUDED.state,
          removed_at = EXCLUDED.removed_at,
-         way = EXCLUDED.way,
          app_id = EXCLUDED.app_id,
          app_secret = EXCLUDED.app_secret,
          webhook_key = EXCLUDED.webhook_key,
@@ -527,12 +521,11 @@ export class PostgresStore implements WhatsAppStore {
         installation.privacy,
         installation.state,
         installation.removedAt ?? null,
-        installation.ownApp ? "own_app" : "embedded_signup",
-        installation.ownApp?.appId ?? null,
-        installation.ownApp?.appSecret
-          ? JSON.stringify(installation.ownApp.appSecret)
+        installation.app.appId,
+        installation.app.appSecret
+          ? JSON.stringify(installation.app.appSecret)
           : null,
-        installation.ownApp?.webhookKey ?? null,
+        installation.app.webhookKey ?? null,
       ],
     );
   }

@@ -80,7 +80,7 @@ export function sameSecret(given: string, expected: string): boolean {
 }
 
 /**
- * A business's own Meta app (WA-48) sends its webhooks to its own address,
+ * Each application's own Meta app sends its webhooks to its own address,
  * `/whatsapp/webhook/<key>`: the key, 24 unguessable characters, names the
  * installation, so its POSTs are checked with that app's secret alone.
  */
@@ -92,11 +92,12 @@ export const WEBHOOK_KEY = /^[A-Za-z0-9_-]{24}$/;
 
 /**
  * The verify token Meta must echo for a webhook key: derived from the
- * service's own verify token, so a key answers Meta's verification before
- * its number is connected and nothing is kept for it.
+ * service's own verify secret (`DATALAYER_WHATSAPP_VERIFY_SECRET`, never a
+ * Meta value), so a key answers Meta's verification before its number is
+ * connected and nothing is kept for it.
  */
-export function verifyTokenOf(serviceVerifyToken: string, key: string): string {
-  return createHmac("sha256", serviceVerifyToken)
-    .update(`own-app-webhook:${key}`)
+export function verifyTokenOf(verifySecret: string, key: string): string {
+  return createHmac("sha256", verifySecret)
+    .update(`webhook-verify:${key}`)
     .digest("base64url");
 }

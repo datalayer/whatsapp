@@ -6,12 +6,14 @@ import { signatureOf } from "../../src/verify.js";
 
 /**
  * Meta's side for tests: webhook bodies shaped as the Cloud API sends them,
- * signed with a test app secret. Ids are made up; the phone numbers are in
+ * signed with a test secret of the application's own Meta app. Ids are made up; the phone numbers are in
  * a range no real person holds, and are there to prove they are dropped.
  */
 
+/** The application's own Meta app's secret: a test value. */
 export const APP_SECRET = "test-only-not-an-app-secret";
-export const VERIFY_TOKEN = "test-only-verify-token";
+/** The service's verify secret, each address's verify token derived from it. */
+export const VERIFY_SECRET = "test-only-verify-secret-of-32-chars";
 export const WABA = "102290129340398";
 export const PHONE_NUMBER_ID = "106540352242922";
 export const ALICE = "US.13491208655302741918";

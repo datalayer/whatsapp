@@ -21,14 +21,14 @@ const schema = z
     DATALAYER_WHATSAPP_ROLE: z.enum(["all", "ingress", "worker"]),
     /** The durable store; only development and tests may run without one. */
     DATABASE_URL: secret.optional(),
-    /** The Meta app's secret: what `X-Hub-Signature-256` is computed with. */
-    DATALAYER_WHATSAPP_APP_SECRET: secret,
-    /** What Meta's endpoint verification must echo (`hub.verify_token`). */
-    DATALAYER_WHATSAPP_VERIFY_TOKEN: z
+    /**
+     * What each webhook address's verify token is derived from (HMAC-SHA256
+     * of its key): the service's own, generated once by the chart and kept.
+     * Datalayer has no Meta app: each application's developer brings theirs.
+     */
+    DATALAYER_WHATSAPP_VERIFY_SECRET: z
       .string()
-      .min(16, "at least 16 characters"),
-    /** The Meta app's id: what Embedded Signup's code is exchanged with. */
-    DATALAYER_WHATSAPP_APP_ID: z.string().regex(/^\d{1,32}$/, "Meta's app id"),
+      .min(32, "at least 32 characters"),
     /** The Graph API and its version. */
     DATALAYER_WHATSAPP_GRAPH_URL: z
       .url()

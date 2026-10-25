@@ -18,6 +18,7 @@ import {
   WABA,
   webhook,
 } from "./support/meta.js";
+import { APP_ID } from "./support/worker.js";
 
 /**
  * Redacted logs: whatever a line carries — a field, an error, a nested
@@ -78,6 +79,7 @@ describe("redacted logs", () => {
           ],
         }),
       ),
+      APP_ID,
     );
     logger.info("debug.webhook", { normalized, raw: JSON.parse(webhook({})) });
     const written = lines.join("\n");

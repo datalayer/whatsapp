@@ -9,6 +9,7 @@ import {
   WABA,
   webhook,
 } from "./support/meta.js";
+import { APP_ID } from "./support/worker.js";
 
 /** What a webhook's body becomes before anything is kept. */
 describe("normalize", () => {
@@ -17,6 +18,7 @@ describe("normalize", () => {
       JSON.parse(
         webhook({ messages: [message("wamid.N1", extra)], ...value }),
       ) as unknown,
+      APP_ID,
     );
 
   it("reads a pressed button, a picked row and a quick reply as the reply", () => {
@@ -107,6 +109,7 @@ describe("normalize", () => {
     const withoutOwn = { ...message("wamid.N2"), from_user_id: undefined };
     const fromContact = normalize(
       JSON.parse(webhook({ messages: [withoutOwn] })) as unknown,
+      APP_ID,
     );
     expect(fromContact.jobs[0]?.job).toMatchObject({
       phoneNumberId: PHONE_NUMBER_ID,
@@ -117,6 +120,7 @@ describe("normalize", () => {
       JSON.parse(
         webhook({ contacts: [{ wa_id: ALICE_PHONE }], messages: [withoutOwn] }),
       ) as unknown,
+      APP_ID,
     );
     expect(nobody.jobs).toEqual([]);
     expect(nobody.ignored).toEqual(["message_without_user_id"]);
@@ -129,21 +133,25 @@ describe("normalize", () => {
           statuses: [{ id: "wamid.X", status: "warning", timestamp: "1" }],
         }),
       ) as unknown,
+      APP_ID,
     );
     expect(value.statuses).toEqual([]);
     expect(value.ignored).toEqual(["status:warning"]);
     expect(
-      normalize(JSON.parse(webhook({}, "flows")) as unknown).ignored,
+      normalize(JSON.parse(webhook({}, "flows")) as unknown, APP_ID).ignored,
     ).toEqual(["field:flows"]);
   });
 
   it("refuses what is not a business account's webhook", () => {
-    expect(() => normalize({ entry: [], object: "page" })).toThrow();
+    expect(() => normalize({ entry: [], object: "page" }, APP_ID)).toThrow();
     expect(() =>
-      normalize({
-        entry: [{ changes: [{ field: "messages", value: {} }], id: WABA }],
-        object: "whatsapp_business_account",
-      }),
+      normalize(
+        {
+          entry: [{ changes: [{ field: "messages", value: {} }], id: WABA }],
+          object: "whatsapp_business_account",
+        },
+        APP_ID,
+      ),
     ).toThrow();
   });
 

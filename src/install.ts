@@ -12,16 +12,15 @@ import { z } from "zod";
 
 import { externalIdOf } from "./domain.js";
 import {
-  BUSINESS_APP_SYNCS,
   META_CODES,
   MetaError,
-  OWN_APP_SCOPES,
+  TOKEN_SCOPES,
   type BusinessNumber,
   type MetaPort,
   type TemplateState,
 } from "./meta-port.js";
 import type { Routes } from "./server.js";
-import { appOf, installationData, type WhatsAppStore } from "./store.js";
+import { installationData, type WhatsAppStore } from "./store.js";
 import {
   BodyTooLargeError,
   newWebhookKey,
@@ -33,88 +32,44 @@ import { WEBHOOK_FIELDS, WEBHOOK_PATH } from "./webhook.js";
 import { TEMPLATES, type WindowKeeper } from "./window.js";
 
 /**
- * Install through Meta's Embedded Signup. The application's Ship card makes
- * the pending installation at Datalayer (its one-use bind code) and runs
- * Embedded Signup in the owner's browser, which answers the business
- * account, the number's id and a code; the card posts them with the bind
- * code to `POST /whatsapp/install`. The service then, server to server:
- * exchanges the code for the business token, checks the number is the
- * account's, subscribes Datalayer's app to the account's webhooks,
- * registers the number with a PIN it makes, creates the three notice
- * templates, binds the installation at Datalayer
- * (`<waba_id>:<phone_number_id>`), registers where deliveries are pushed,
- * and keeps the host key, the business token, the PIN and the delivery
- * secret encrypted. A bind code that is spent or expired stores nothing; a
- * reinstall of the same number replaces the old installation, which ends at
- * Datalayer. Only the card's origin may post (CORS).
- *
- * When the signup's window did not say the account or the number, the
- * service finds them from the business token: the account Meta's
- * debug_token says was granted last, and its only number (several, or
- * none, and nothing is kept). A number kept on the WhatsApp Business app
- * (Meta's coexistence, `coexistence: true`) is not registered again: its
- * contacts and history syncs are asked once instead, as Meta requires
- * within 24 hours; what Meta sends back is not kept. A number registered on
- * the Cloud API already is not registered again (that would need the PIN it
- * was registered with). The business's support contact and privacy page are
- * kept with the installation.
- *
- * Install with the business's own Meta app (WA-48), so that Datalayer need
- * not be a Meta Tech Provider: the card first asks
+ * Install with the application's own Meta app. Datalayer has no Meta app
+ * and is not a Meta Tech Provider: each Datalayer application that answers
+ * on WhatsApp has its own Meta app, created by its developer under their own
+ * business portfolio, so that each application's number, webhook, quality
+ * and billing stay its own. The application's Ship card makes the pending
+ * installation at Datalayer (its one-use bind code), then asks
  * `POST /whatsapp/install/webhook` for the app's webhook address
  * (`/whatsapp/webhook/<key>`, a new unguessable key) and its verify token
- * (derived from the key: nothing is kept until the number is connected, and
- * Meta's verification is answered already). The business puts both in its
- * app, then the card posts the bind code, the key, the app's id and secret
- * and a system user token to `POST /whatsapp/install/own-app`. The service
- * checks the token with Meta's debug_token, asked with that app's own
- * token: it must be the app's, valid, with both WhatsApp permissions. The
- * account and the number are found from the token, then the steps are
- * Embedded Signup's. The app's secret is kept encrypted beside the token:
- * it signs the webhooks of the installation's own address.
+ * (derived from the key with the service's own verify secret: nothing is
+ * kept until the number is connected, and Meta's verification is answered
+ * already). The developer puts both in the app, then the card posts the
+ * bind code, the key, the app's id and secret and a system user token to
+ * `POST /whatsapp/install`. Only the card's origin may post (CORS).
+ *
+ * The service checks the token with Meta's debug_token, asked with that
+ * app's own token: it must be the app's, valid, with both WhatsApp
+ * permissions. The account and the number are found from the token. Then,
+ * server to server: the app subscribed to the account's webhooks, the
+ * number registered with a PIN (the one given, or one the service makes)
+ * unless it is on the Cloud API already (that would need the PIN it was
+ * registered with), the three notice templates created, the installation
+ * bound at Datalayer (`<waba_id>:<phone_number_id>`), where deliveries are
+ * pushed registered, and the host key, the business token, the PIN, the
+ * delivery secret and the app's secret kept encrypted; the app's secret
+ * signs the webhooks of the installation's own address. A bind code that is
+ * spent or expired stores nothing; a reinstall of the same number replaces
+ * the old installation, which ends at Datalayer. The business's support
+ * contact and privacy page are kept with the installation.
  */
 
+/** Where the card posts the app's credentials, and the number is connected. */
 export const INSTALL_PATH = "/whatsapp/install";
-/** Where the card gets the webhook address and verify token for the business's own app. */
-export const OWN_APP_WEBHOOK_PATH = "/whatsapp/install/webhook";
-/** Where the card posts the business's own app's credentials. */
-export const OWN_APP_INSTALL_PATH = "/whatsapp/install/own-app";
+/** Where the card gets the app's webhook address and verify token. */
+export const WEBHOOK_ADDRESS_PATH = "/whatsapp/install/webhook";
 /** The most an install request carries. */
 export const INSTALL_BODY_LIMIT = 16 * 1024;
 
 const metaId = z.string().regex(/^\d{1,32}$/);
-
-const requestSchema = z
-  .object({
-    bind_code: z.string().regex(/^[A-Za-z0-9_-]{8,200}$/),
-    code: z.string().min(1).max(2048),
-    /**
-     * The business account and the number, as the signup's window said them.
-     * Either may be missing (a number kept on the WhatsApp Business app is
-     * answered with its account only, and Meta's window sometimes says
-     * nothing): the service then finds them from the business token.
-     */
-    waba_id: metaId.optional(),
-    phone_number_id: metaId.optional(),
-    /** The number stays on the WhatsApp Business app (Meta's coexistence): never registered again. */
-    coexistence: z.boolean().optional(),
-    /** How a person reaches someone at the business: said in every chat. */
-    support: z.string().trim().min(3).max(200),
-    /** The business's privacy page, https: kept with the installation. */
-    privacy: z
-      .string()
-      .trim()
-      .max(2048)
-      .refine((value) => {
-        try {
-          const url = new URL(value);
-          return url.protocol === "https:" && url.hostname.includes(".");
-        } catch {
-          return false;
-        }
-      }),
-  })
-  .strict();
 
 const supportSchema = z.string().trim().min(3).max(200);
 const privacySchema = z
@@ -137,7 +92,7 @@ const webhookRequestSchema = z
   })
   .strict();
 
-const ownAppRequestSchema = z
+const requestSchema = z
   .object({
     bind_code: z.string().regex(/^[A-Za-z0-9_-]{8,200}$/),
     /** The key of the webhook address the business put in its app. */
@@ -163,8 +118,8 @@ export type InstallDependencies = Readonly<{
   appUrl: string;
   /** Datalayer's web origin: the only one whose card may post. */
   webUrl: string;
-  /** The service's own verify token: each own app's is derived from it. */
-  verifyToken: string;
+  /** The service's own verify secret: each address's verify token is derived from it. */
+  verifySecret: string;
   store: WhatsAppStore;
   cipher: SecretCipher;
   port: MetaPort;
@@ -179,19 +134,10 @@ export type InstallDependencies = Readonly<{
 /** What the card is answered: connected, or why not in one sentence. */
 export const INSTALL_WORDS = {
   invalid: "The install request is not one this service takes.",
-  signup:
-    "Meta did not confirm the signup: connect the number again from the Ship tab.",
-  notTheAccounts:
-    "That number is not one of the business account Meta answered.",
-  noAccount:
-    "Meta did not say which WhatsApp business account was shared: connect the number again from the Ship tab.",
-  whichNumber:
-    "Meta did not say which number was connected, and the business account has several or none: connect the number again from the Ship tab.",
   meta: "Meta refused a step of the install: nothing was kept. Try again from the Ship tab.",
   bind: "The install's code from Datalayer was used or expired: nothing was kept. Connect the number again from the Ship tab.",
   pinMismatch:
-    "The number has a two-step verification PIN already, and Meta refused the one tried: enter the number's PIN on the card (with your own Meta app), or turn two-step verification off in WhatsApp Manager, then connect again.",
-  // With the business's own Meta app (WA-48).
+    "The number has a two-step verification PIN already, and Meta refused the one tried: enter the number's PIN on the card, or turn two-step verification off in WhatsApp Manager, then connect again.",
   appRefused:
     "Meta did not accept that app id and app secret together: copy both again from your app's Basic settings.",
   tokenNotTheApp:
@@ -200,11 +146,11 @@ export const INSTALL_WORDS = {
     "Meta says that access token is not valid any more: generate a new one.",
   tokenPermissions:
     "That access token lacks whatsapp_business_messaging or whatsapp_business_management: generate a new one with both.",
-  ownAppNoAccount:
+  noAccount:
     "That access token reaches no WhatsApp business account: assign yours to the system user, then generate a new token.",
-  ownAppNotTheNumber:
+  notTheNumber:
     "That phone number id is not one of the WhatsApp business accounts the access token reaches.",
-  ownAppWhichNumber:
+  whichNumber:
     "The access token reaches several numbers, or none: enter the phone number id of the one to connect.",
   webhookTaken:
     "That webhook address is already another number's: show a new address on the card, put it in your app, and connect again.",
@@ -286,39 +232,33 @@ export function installRoutes(dependencies: InstallDependencies): Routes {
       done.ok ? { connected: true, name: done.name } : { error: done.error },
     );
   return {
+    [`OPTIONS ${WEBHOOK_ADDRESS_PATH}`]: preflight,
     [`OPTIONS ${INSTALL_PATH}`]: preflight,
-    [`OPTIONS ${OWN_APP_WEBHOOK_PATH}`]: preflight,
-    [`OPTIONS ${OWN_APP_INSTALL_PATH}`]: preflight,
-    [`POST ${INSTALL_PATH}`]: async (request, response) => {
-      const parsed = await read(request, response, requestSchema);
-      if (parsed)
-        outcome(request, response, await install(dependencies, parsed));
-    },
-    [`POST ${OWN_APP_WEBHOOK_PATH}`]: async (request, response) => {
+    [`POST ${WEBHOOK_ADDRESS_PATH}`]: async (request, response) => {
       const parsed = await read(request, response, webhookRequestSchema);
       if (parsed)
         answer(
           request,
           response,
           200,
-          ownAppWebhookOf(dependencies, parsed.key ?? newWebhookKey()),
+          webhookAddressOf(dependencies, parsed.key ?? newWebhookKey()),
         );
     },
-    [`POST ${OWN_APP_INSTALL_PATH}`]: async (request, response) => {
-      const parsed = await read(request, response, ownAppRequestSchema);
+    [`POST ${INSTALL_PATH}`]: async (request, response) => {
+      const parsed = await read(request, response, requestSchema);
       if (parsed)
-        outcome(request, response, await installOwnApp(dependencies, parsed));
+        outcome(request, response, await install(dependencies, parsed));
     },
   };
 }
 
 /**
- * What a business puts in its own app's WhatsApp webhook settings: the
+ * What the developer puts in the app's WhatsApp webhook settings: the
  * callback address, the verify token Meta must echo, and the fields to
  * subscribe. The key is not kept until a number is connected with it.
  */
-export function ownAppWebhookOf(
-  dependencies: Pick<InstallDependencies, "appUrl" | "verifyToken">,
+export function webhookAddressOf(
+  dependencies: Pick<InstallDependencies, "appUrl" | "verifySecret">,
   key: string,
 ): {
   key: string;
@@ -330,7 +270,7 @@ export function ownAppWebhookOf(
     callback_url: `${dependencies.appUrl.replace(/\/+$/, "")}${WEBHOOK_PATH}/${key}`,
     fields: [...WEBHOOK_FIELDS],
     key,
-    verify_token: verifyTokenOf(dependencies.verifyToken, key),
+    verify_token: verifyTokenOf(dependencies.verifySecret, key),
   };
 }
 
@@ -356,62 +296,13 @@ function metaRefused(
   return { error: words, ok: false };
 }
 
-/** The install through Embedded Signup, once the request is read. */
+/** How many business accounts a token's numbers are looked for in, at most. */
+export const TOKEN_ACCOUNTS = 20;
+
+/** The install, once the request is read. */
 export async function install(
   dependencies: InstallDependencies,
   request: z.infer<typeof requestSchema>,
-): Promise<InstallOutcome> {
-  const { port, logger } = dependencies;
-  let token: string;
-  try {
-    token = await port.exchangeCode(request.code);
-  } catch (error) {
-    logger.warn("install.code_refused", { error });
-    return { error: INSTALL_WORDS.signup, ok: false };
-  }
-  let wabaId: string;
-  let number: BusinessNumber | undefined;
-  try {
-    // The account: as the window said it, else the newest one the token was granted.
-    const account =
-      request.waba_id ?? (await port.grantedAccounts(token)).at(0);
-    if (!account) return { error: INSTALL_WORDS.noAccount, ok: false };
-    wabaId = account;
-    const numbers = await port.numbers(token, wabaId);
-    // The number: as the window said it, else the account's only one.
-    number = request.phone_number_id
-      ? numbers.find((one) => one.id === request.phone_number_id)
-      : numbers.length === 1
-        ? numbers[0]
-        : undefined;
-  } catch (error) {
-    return metaRefused(logger, error);
-  }
-  if (!number)
-    return {
-      error: request.phone_number_id
-        ? INSTALL_WORDS.notTheAccounts
-        : INSTALL_WORDS.whichNumber,
-      ok: false,
-    };
-  return connect(dependencies, {
-    bindCode: request.bind_code,
-    coexistence: request.coexistence === true,
-    number,
-    privacy: request.privacy,
-    support: request.support,
-    token,
-    wabaId,
-  });
-}
-
-/** How many business accounts a token's numbers are looked for in, at most. */
-export const OWN_APP_ACCOUNTS = 20;
-
-/** The install with the business's own Meta app (WA-48), once the request is read. */
-export async function installOwnApp(
-  dependencies: InstallDependencies,
-  request: z.infer<typeof ownAppRequestSchema>,
 ): Promise<InstallOutcome> {
   const { port, logger, store } = dependencies;
   const app = { id: request.app_id, secret: request.app_secret };
@@ -425,14 +316,14 @@ export async function installOwnApp(
   if (grant.appId !== request.app_id)
     return { error: INSTALL_WORDS.tokenNotTheApp, ok: false };
   if (!grant.valid) return { error: INSTALL_WORDS.tokenInvalid, ok: false };
-  if (!OWN_APP_SCOPES.every((scope) => grant.scopes.includes(scope)))
+  if (!TOKEN_SCOPES.every((scope) => grant.scopes.includes(scope)))
     return { error: INSTALL_WORDS.tokenPermissions, ok: false };
   if (!grant.accounts.length)
-    return { error: INSTALL_WORDS.ownAppNoAccount, ok: false };
+    return { error: INSTALL_WORDS.noAccount, ok: false };
   // The number: as the card said it, else the only one the token reaches.
   const reached: Array<{ wabaId: string; number: BusinessNumber }> = [];
   try {
-    for (const account of grant.accounts.slice(0, OWN_APP_ACCOUNTS))
+    for (const account of grant.accounts.slice(0, TOKEN_ACCOUNTS))
       for (const number of await port.numbers(token, account))
         reached.push({ number, wabaId: account });
   } catch (error) {
@@ -446,8 +337,8 @@ export async function installOwnApp(
   if (!found)
     return {
       error: request.phone_number_id
-        ? INSTALL_WORDS.ownAppNotTheNumber
-        : INSTALL_WORDS.ownAppWhichNumber,
+        ? INSTALL_WORDS.notTheNumber
+        : INSTALL_WORDS.whichNumber,
       ok: false,
     };
   // One webhook address, one number.
@@ -458,14 +349,13 @@ export async function installOwnApp(
   )
     return { error: INSTALL_WORDS.webhookTaken, ok: false };
   return connect(dependencies, {
-    bindCode: request.bind_code,
-    coexistence: false,
-    number: found.number,
-    ownApp: {
+    app: {
       appId: request.app_id,
       appSecret: request.app_secret,
       webhookKey: request.webhook_key,
     },
+    bindCode: request.bind_code,
+    number: found.number,
     ...(request.pin ? { pin: request.pin } : {}),
     privacy: request.privacy,
     support: request.support,
@@ -474,44 +364,37 @@ export async function installOwnApp(
   });
 }
 
-/** A number found and its business token in hand: what both ways do next. */
+/** A number found and its business token in hand: what is done next. */
 type Connection = Readonly<{
   bindCode: string;
   token: string;
   wabaId: string;
   number: BusinessNumber;
-  /** Kept on the WhatsApp Business app (Embedded Signup only): never registered. */
-  coexistence: boolean;
   /** The number's own two-step PIN, when the business gave it. */
   pin?: string;
   support: string;
   privacy: string;
-  ownApp?: Readonly<{ appId: string; appSecret: string; webhookKey: string }>;
+  app: Readonly<{ appId: string; appSecret: string; webhookKey: string }>;
 }>;
 
 /**
- * Subscribe the app, register the number (or ask a kept business app's
- * syncs), make the templates, bind at Datalayer, register the delivery
- * address, and keep it all encrypted. A refused step keeps nothing.
+ * Subscribe the app, register the number, make the templates, bind at
+ * Datalayer, register the delivery address, and keep it all encrypted. A
+ * refused step keeps nothing.
  */
 async function connect(
   dependencies: InstallDependencies,
   connection: Connection,
 ): Promise<InstallOutcome> {
   const { port, store, cipher, hosts, logger } = dependencies;
-  const { token, wabaId, ownApp } = connection;
+  const { token, wabaId, app } = connection;
   const phoneNumberId = connection.number.id;
   const name = connection.number.verifiedName || "The business";
   let pin: string | undefined;
   const templates: Array<[string, TemplateState]> = [];
   try {
     await port.subscribe(token, wabaId);
-    if (connection.coexistence)
-      // Kept on the WhatsApp Business app: registered already; Meta asks
-      // for its contacts and history syncs once, within 24 hours.
-      for (const kind of BUSINESS_APP_SYNCS)
-        await port.syncBusinessApp(token, phoneNumberId, kind);
-    else if (await port.onCloudApi(token, phoneNumberId))
+    if (await port.onCloudApi(token, phoneNumberId))
       // Registered on the Cloud API already: registering again would need
       // its PIN; the one the business gave, if any, is kept.
       pin = connection.pin;
@@ -541,10 +424,11 @@ async function connect(
     if (!(error instanceof HostRefusedError)) throw error;
     logger.warn("install.bind_refused", { status: error.status });
     // Nothing kept: the app leaves the account unless another number of it is kept through it.
-    const app = appOf(ownApp ? { ownApp: { appId: ownApp.appId } } : {});
     const others = (await store.installations()).some(
       (one) =>
-        one.wabaId === wabaId && one.state !== "removed" && appOf(one) === app,
+        one.wabaId === wabaId &&
+        one.state !== "removed" &&
+        one.app.appId === app.appId,
     );
     if (!others)
       await port
@@ -609,18 +493,14 @@ async function connect(
     support: connection.support,
     wabaId,
     ...(deliverySecret ? { deliverySecret } : {}),
-    ...(ownApp
-      ? {
-          ownApp: {
-            appId: ownApp.appId,
-            appSecret: cipher.encrypt(
-              ownApp.appSecret,
-              installationData("app-secret", wabaId, phoneNumberId),
-            ),
-            webhookKey: ownApp.webhookKey,
-          },
-        }
-      : {}),
+    app: {
+      appId: app.appId,
+      appSecret: cipher.encrypt(
+        app.appSecret,
+        installationData("app-secret", wabaId, phoneNumberId),
+      ),
+      webhookKey: app.webhookKey,
+    },
   });
   for (const [template, state] of templates)
     await dependencies.window.created(
@@ -632,7 +512,6 @@ async function connect(
   logger.audit("admin.changed", {
     installation: externalId,
     reason: before ? "reinstalled" : "installed",
-    way: ownApp ? "own_app" : "embedded_signup",
   });
   return { hostUid: bound.hostUid, name, ok: true };
 }

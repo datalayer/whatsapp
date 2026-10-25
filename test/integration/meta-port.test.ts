@@ -77,8 +77,6 @@ describe("the Graph API port", () => {
     const clock = new FakeClock();
     const metrics = new Metrics(capturingLogger().logger);
     const port = new HttpMetaPort({
-      appId: "1000000000000001",
-      appSecret: "test-only-app-secret",
       clock,
       graphUrl: served.url,
       metrics,
@@ -165,9 +163,8 @@ describe("the Graph API port", () => {
     expect(seen).toEqual([]);
   });
 
-  it("exchanges the signup's code, reads numbers without their phone numbers, reads a template that exists", async () => {
+  it("reads numbers without their phone numbers, reads a template that exists", async () => {
     const { port, seen } = await setup([
-      { body: { access_token: "EAAbusiness" }, status: 200 },
       {
         body: { data: [{ id: PHONE_NUMBER_ID, verified_name: "Acme SRL" }] },
         status: 200,
@@ -183,7 +180,6 @@ describe("the Graph API port", () => {
         status: 200,
       },
     ]);
-    expect(await port.exchangeCode("code-1")).toBe("EAAbusiness");
     expect(await port.numbers(TOKEN, WABA)).toEqual([
       { id: PHONE_NUMBER_ID, verifiedName: "Acme SRL" },
     ]);
@@ -191,18 +187,14 @@ describe("the Graph API port", () => {
       category: "UTILITY",
       status: "APPROVED",
     });
-    const exchange = new URL(`http://x${seen[0]!.path}`);
-    expect(exchange.pathname).toBe("/v23.0/oauth/access_token");
-    expect(exchange.searchParams.get("code")).toBe("code-1");
-    expect(exchange.searchParams.get("client_id")).toBe("1000000000000001");
-    expect(seen[1]!.path).toBe(
+    expect(seen[0]!.path).toBe(
       `/v23.0/${WABA}/phone_numbers?fields=id%2Cverified_name`,
     );
-    expect(JSON.parse(seen[2]!.body)).toEqual(TEMPLATES.delivery);
-    expect(seen[3]!.path).toContain("name=datalayer_turn_done");
+    expect(JSON.parse(seen[1]!.body)).toEqual(TEMPLATES.delivery);
+    expect(seen[2]!.path).toContain("name=datalayer_turn_done");
   });
 
-  it("finds the granted business accounts with the app's token, newest first, and asks a business app number's syncs", async () => {
+  it("finds the token's business accounts with the app's own token, newest first, ids only", async () => {
     const { port, seen } = await setup([
       {
         body: {
@@ -222,32 +214,24 @@ describe("the Graph API port", () => {
         status: 200,
       },
       { body: { data: { granular_scopes: [] } }, status: 200 },
-      {
-        body: { messaging_product: "whatsapp", request_id: "r-1" },
-        status: 200,
-      },
     ]);
-    expect(await port.grantedAccounts(TOKEN)).toEqual([WABA, "555"]);
-    expect(await port.grantedAccounts(TOKEN)).toEqual([]);
+    const app = { id: "1000000000000001", secret: "test-only-app-secret" };
+    expect((await port.tokenOf(app, TOKEN)).accounts).toEqual([WABA, "555"]);
+    expect(await port.tokenOf(app, TOKEN)).toEqual({
+      accounts: [],
+      appId: "",
+      scopes: [],
+      valid: false,
+    });
     const debug = new URL(`http://x${seen[0]!.path}`);
     expect(debug.pathname).toBe("/v23.0/debug_token");
     expect(debug.searchParams.get("input_token")).toBe(TOKEN);
     // The app's token in the header, never the secret in the address.
     expect(seen[0]!.auth).toBe("Bearer 1000000000000001|test-only-app-secret");
     expect(seen[0]!.path).not.toContain("test-only-app-secret");
-    await port.syncBusinessApp(TOKEN, PHONE_NUMBER_ID, "history");
-    expect(seen[2]).toMatchObject({
-      auth: `Bearer ${TOKEN}`,
-      method: "POST",
-      path: `/v23.0/${PHONE_NUMBER_ID}/smb_app_data`,
-    });
-    expect(JSON.parse(seen[2]!.body)).toEqual({
-      messaging_product: "whatsapp",
-      sync_type: "history",
-    });
   });
 
-  it("reads a business's own app's token with that app's own token, and whether a number is on the Cloud API", async () => {
+  it("reads the app's system user token with that app's own token, and whether a number is on the Cloud API", async () => {
     const { port, seen } = await setup([
       {
         body: {

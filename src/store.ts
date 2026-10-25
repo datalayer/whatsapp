@@ -135,25 +135,16 @@ export type Installation = Readonly<{
   state: InstallationState;
   removedAt?: Date;
   /**
-   * Connected with the business's own Meta app (WA-48), not through
-   * Datalayer's Embedded Signup: the app's id, the key of its webhook
-   * address (`/whatsapp/webhook/<key>`) and its secret, which signs that
-   * address's webhooks. Its business token is the app's system user token.
-   * A removed installation keeps the app's id only.
+   * The application developer's own Meta app the number is connected with
+   * (Datalayer has none): the app's id, the key of its webhook address
+   * (`/whatsapp/webhook/<key>`) and its secret, which signs that address's
+   * webhooks. The business token is the app's system user token. A removed
+   * installation keeps the app's id only.
    */
-  ownApp?: OwnAppInstallation;
+  app: InstallationApp;
 }>;
 
-/**
- * Which Meta app an installation's webhooks come through: the business's
- * own (its id), or Datalayer's (Embedded Signup). A business account's
- * subscription to an app is ended only when no other number of the
- * account is kept through the same app.
- */
-export const appOf = (installation: Pick<Installation, "ownApp">): string =>
-  installation.ownApp ? `own:${installation.ownApp.appId}` : "datalayer";
-
-export type OwnAppInstallation = Readonly<{
+export type InstallationApp = Readonly<{
   appId: string;
   webhookKey?: string;
   appSecret?: EncryptedSecret;
@@ -280,7 +271,7 @@ export interface WhatsAppStore {
     phoneNumberId: string,
   ): Promise<Installation | undefined>;
   installationByHost(hostUid: string): Promise<Installation | undefined>;
-  /** The installation a business's own app's webhook address names (WA-48). */
+  /** The installation a webhook address names (`/whatsapp/webhook/<key>`). */
   installationByWebhookKey(key: string): Promise<Installation | undefined>;
   installations(state?: InstallationState): Promise<Installation[]>;
   /** Pause or resume: `false` for an unknown or removed installation. */
@@ -608,7 +599,7 @@ export class MemoryStore implements WhatsAppStore {
     key: string,
   ): Promise<Installation | undefined> {
     return [...this.#installations.values()].find(
-      (one) => one.ownApp?.webhookKey === key,
+      (one) => one.app.webhookKey === key,
     );
   }
 
@@ -646,7 +637,7 @@ export class MemoryStore implements WhatsAppStore {
     await this.saveInstallation({
       ...rest,
       // The app's id stays; its secret and webhook address go.
-      ...(rest.ownApp ? { ownApp: { appId: rest.ownApp.appId } } : {}),
+      app: { appId: rest.app.appId },
       removedAt: at,
       state: "removed",
     });

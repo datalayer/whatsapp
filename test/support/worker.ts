@@ -19,13 +19,12 @@ import { whatsappShape, type WhatsAppTurn } from "../../src/domain.js";
 import {
   MetaError,
   checkLimits,
-  type BusinessAppSync,
   type BusinessNumber,
   type MetaPort,
   type Outgoing,
   type TemplateState,
-  OWN_APP_SCOPES,
-  type OwnApp,
+  TOKEN_SCOPES,
+  type MetaApp,
   type TokenGrant,
 } from "../../src/meta-port.js";
 import { Metrics } from "../../src/observability.js";
@@ -38,7 +37,13 @@ import type { MessageJob } from "../../src/webhook.js";
 import { TEMPLATE_NAMES, WindowKeeper } from "../../src/window.js";
 import { Worker } from "../../src/worker.js";
 import { FakeHosts } from "./hosts.js";
-import { ALICE, capturingLogger, PHONE_NUMBER_ID, WABA } from "./meta.js";
+import {
+  ALICE,
+  APP_SECRET,
+  capturingLogger,
+  PHONE_NUMBER_ID,
+  WABA,
+} from "./meta.js";
 
 /** A clock tests move by hand; `sleep` moves it. */
 export class FakeClock implements Clock {
@@ -59,8 +64,11 @@ export const testCipher = (): SecretCipher =>
 
 export const HOST_KEY = "dlhk_test-only-host-key";
 export const BUSINESS_TOKEN = "EAAtest-only-business-token";
-/** A business's own Meta app's id (WA-48). */
-export const OWN_APP_ID = "2000000000000002";
+/** The application's own Meta app's id. */
+export const APP_ID = "2000000000000002";
+/** The key of a test installation's own webhook address (`/whatsapp/webhook/<key>`), one per number. */
+export const webhookKeyOf = (phoneNumberId = PHONE_NUMBER_ID): string =>
+  `wk-${phoneNumberId}`.padEnd(24, "0").slice(0, 24);
 
 /** One call Meta's fake saw. */
 export type MetaCall = Readonly<{
@@ -85,8 +93,6 @@ export class FakeMeta implements MetaPort {
     { id: PHONE_NUMBER_ID, verifiedName: "Acme SRL" },
   ];
   templateStatus = "APPROVED";
-  /** The business accounts debug_token says the signup's token was granted, newest first. */
-  grantedOf: string[] = [WABA];
   #sent = 0;
 
   constructor(readonly clock: FakeClock) {}
@@ -167,25 +173,15 @@ export class FakeMeta implements MetaPort {
     return `media-${this.calls.length}`;
   }
 
-  async exchangeCode(code: string): Promise<string> {
-    this.#record({ detail: code, method: "exchangeCode" });
-    return BUSINESS_TOKEN;
-  }
-
-  async grantedAccounts(token: string): Promise<string[]> {
-    this.#record({ method: "grantedAccounts", token });
-    return this.grantedOf;
-  }
-
-  /** What debug_token says of a business's own app's token (WA-48). */
+  /** What debug_token says of the app's system user token. */
   tokenGrant: TokenGrant = {
     accounts: [WABA],
-    appId: OWN_APP_ID,
-    scopes: [...OWN_APP_SCOPES],
+    appId: APP_ID,
+    scopes: [...TOKEN_SCOPES],
     valid: true,
   };
 
-  async tokenOf(app: OwnApp, token: string): Promise<TokenGrant> {
+  async tokenOf(app: MetaApp, token: string): Promise<TokenGrant> {
     this.#record({ detail: app.id, method: "tokenOf", token });
     return this.tokenGrant;
   }
@@ -196,19 +192,6 @@ export class FakeMeta implements MetaPort {
   async onCloudApi(token: string, phoneNumberId: string): Promise<boolean> {
     this.#record({ method: "onCloudApi", phoneNumberId, token });
     return this.registered;
-  }
-
-  async syncBusinessApp(
-    token: string,
-    phoneNumberId: string,
-    kind: BusinessAppSync,
-  ): Promise<void> {
-    this.#record({
-      detail: kind,
-      method: "syncBusinessApp",
-      phoneNumberId,
-      token,
-    });
   }
 
   async numbers(token: string, wabaId: string): Promise<BusinessNumber[]> {
@@ -423,6 +406,14 @@ export function installation(
     state: "active",
     support: "support@acme.example",
     wabaId,
+    app: {
+      appId: APP_ID,
+      appSecret: cipher.encrypt(
+        APP_SECRET,
+        installationData("app-secret", wabaId, phoneNumberId),
+      ),
+      webhookKey: webhookKeyOf(phoneNumberId),
+    },
     ...overrides,
   };
 }
