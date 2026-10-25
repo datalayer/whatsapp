@@ -10,7 +10,9 @@
 # 0.1.2: a refused install step logs which step and Meta's codes (c4672bd).
 # 0.1.3: connect with the business's own Meta app (per-installation webhook, app secret kept),
 #        a number already on the Cloud API not registered again (4c711a6, a1ee140).
-VERSION ?= 0.1.3
+# 0.1.4: one way to connect a number, each application's own Meta app; Datalayer has no Meta app
+#        (no app id, secret or verify token; a chart-generated verify secret) (3eafc54).
+VERSION ?= 0.1.4
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 
