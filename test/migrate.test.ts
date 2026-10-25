@@ -46,6 +46,7 @@ describe.runIf(Boolean(DATABASE_URL))("migrate on PostgreSQL", () => {
         ...hostTables("whatsapp"),
         "whatsapp_approval_card",
         "whatsapp_chat",
+        "whatsapp_group",
         "whatsapp_hold",
         "whatsapp_installation",
         "whatsapp_message_count",

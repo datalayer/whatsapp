@@ -26,6 +26,12 @@ import {
   TOKEN_SCOPES,
   type MetaApp,
   type TokenGrant,
+  type GroupCreation,
+  type MetaGroup,
+  type NumberStanding,
+  type OfficialRequest,
+  type OfficialStatus,
+  type RecipientType,
 } from "../../src/meta-port.js";
 import { Metrics } from "../../src/observability.js";
 import {
@@ -77,6 +83,8 @@ export type MetaCall = Readonly<{
   phoneNumberId?: string;
   userId?: string;
   message?: Outgoing;
+  /** `group` for a message to a group. */
+  recipientType?: RecipientType;
   at: number;
   detail?: unknown;
 }>;
@@ -135,14 +143,34 @@ export class FakeMeta implements MetaPort {
     );
   }
 
+  /** What was sent to a group, or to people only. */
+  sentTo(recipientType: RecipientType): Outgoing[] {
+    return this.calls
+      .filter(
+        (one) =>
+          one.method === "send" &&
+          one.message &&
+          (one.recipientType ?? "individual") === recipientType,
+      )
+      .map((one) => one.message as Outgoing);
+  }
+
   async send(
     token: string,
     phoneNumberId: string,
     userId: string,
     message: Outgoing,
+    recipientType: RecipientType = "individual",
   ): Promise<string> {
-    checkLimits(message);
-    this.#record({ message, method: "send", phoneNumberId, token, userId });
+    checkLimits(message, recipientType);
+    this.#record({
+      message,
+      method: "send",
+      phoneNumberId,
+      token,
+      userId,
+      ...(recipientType === "group" ? { recipientType } : {}),
+    });
     this.#sent += 1;
     return `wamid.sent-${this.#sent}`;
   }
@@ -223,6 +251,100 @@ export class FakeMeta implements MetaPort {
     this.#record({ detail: template.name, method: "createTemplate", token });
     void wabaId;
     return { category: "UTILITY", status: this.templateStatus };
+  }
+
+  /** The number's Official Business Account, as Meta would answer it. */
+  official: OfficialStatus = { status: "NOT_STARTED" };
+  standingOf: NumberStanding = {
+    businessVerification: "verified",
+    nameStatus: "APPROVED",
+  };
+  readonly officialRequests: OfficialRequest[] = [];
+  /** The number's groups at Meta, by id. */
+  readonly metaGroups = new Map<string, MetaGroup & { link: string }>();
+  /** Whether a creation answers the group's id at once (else only its request). */
+  groupIdAtOnce = false;
+  #groups = 0;
+
+  async officialStatus(
+    token: string,
+    phoneNumberId: string,
+  ): Promise<OfficialStatus> {
+    this.#record({ method: "officialStatus", phoneNumberId, token });
+    return this.official;
+  }
+
+  async requestOfficial(
+    token: string,
+    phoneNumberId: string,
+    request: OfficialRequest,
+  ): Promise<OfficialStatus> {
+    this.#record({
+      detail: request,
+      method: "requestOfficial",
+      phoneNumberId,
+      token,
+    });
+    this.officialRequests.push(request);
+    this.official = { status: "PENDING" };
+    return this.official;
+  }
+
+  async standing(
+    token: string,
+    wabaId: string,
+    phoneNumberId: string,
+  ): Promise<NumberStanding> {
+    this.#record({ detail: wabaId, method: "standing", phoneNumberId, token });
+    return this.standingOf;
+  }
+
+  async createGroup(
+    token: string,
+    phoneNumberId: string,
+    subject: string,
+  ): Promise<GroupCreation> {
+    this.#record({
+      detail: subject,
+      method: "createGroup",
+      phoneNumberId,
+      token,
+    });
+    this.#groups += 1;
+    const id = `Y2FwaV9ncm91cDp0ZXN0LWdyb3Vw${this.#groups}`;
+    this.metaGroups.set(id, {
+      id,
+      link: `https://chat.whatsapp.com/TestLink${this.#groups}`,
+      subject,
+    });
+    return this.groupIdAtOnce
+      ? { groupId: id, requestId: `request-${this.#groups}` }
+      : { requestId: `request-${this.#groups}` };
+  }
+
+  async groups(token: string, phoneNumberId: string): Promise<MetaGroup[]> {
+    this.#record({ method: "groups", phoneNumberId, token });
+    return [...this.metaGroups.values()].map(({ id, subject }) => ({
+      id,
+      subject,
+    }));
+  }
+
+  async inviteLink(
+    token: string,
+    groupId: string,
+    reset: boolean,
+  ): Promise<string> {
+    this.#record({ detail: { groupId, reset }, method: "inviteLink", token });
+    const group = this.metaGroups.get(groupId);
+    if (!group) throw new MetaError(400, 131041, undefined, "Group unknown");
+    if (reset) group.link = `${group.link}r`;
+    return group.link;
+  }
+
+  async deleteGroup(token: string, groupId: string): Promise<void> {
+    this.#record({ detail: groupId, method: "deleteGroup", token });
+    this.metaGroups.delete(groupId);
   }
 }
 

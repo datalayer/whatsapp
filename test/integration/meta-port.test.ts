@@ -282,4 +282,124 @@ describe("the Graph API port", () => {
       what: "The app's token was not read",
     });
   });
+
+  it("reads and requests the Official Business Account, and reads what it can of its conditions", async () => {
+    const { port, seen } = await setup([
+      {
+        body: {
+          id: PHONE_NUMBER_ID,
+          oba_status: "NOT_STARTED",
+          status_message: "No request.",
+        },
+        status: 200,
+      },
+      {
+        body: { success: true, updated_status: { oba_status: "PENDING" } },
+        status: 200,
+      },
+      { body: { id: PHONE_NUMBER_ID, name_status: "APPROVED" }, status: 200 },
+      { body: { error: { code: 100 } }, status: 400 },
+      { body: { error: { code: 190 } }, status: 401 },
+    ]);
+    expect(await port.officialStatus(TOKEN, PHONE_NUMBER_ID)).toEqual({
+      message: "No request.",
+      status: "NOT_STARTED",
+    });
+    expect(seen[0]!.path).toContain(
+      `/${PHONE_NUMBER_ID}/official_business_account`,
+    );
+    expect(
+      await port.requestOfficial(TOKEN, PHONE_NUMBER_ID, {
+        country: "Belgium",
+        website: "https://acme.example",
+      }),
+    ).toEqual({ status: "PENDING" });
+    expect(seen[1]!.method).toBe("POST");
+    expect(JSON.parse(seen[1]!.body)).toEqual({
+      business_website_url: "https://acme.example",
+      primary_country_of_operation: "Belgium",
+    });
+    // The account's verification unreadable: left out, not a failure.
+    expect(await port.standing(TOKEN, WABA, PHONE_NUMBER_ID)).toEqual({
+      nameStatus: "APPROVED",
+    });
+    // A refused token is still the installation's end.
+    await expect(
+      port.standing(TOKEN, WABA, PHONE_NUMBER_ID),
+    ).rejects.toMatchObject({
+      code: 190,
+    });
+  });
+
+  it("creates, lists, links and deletes groups, and sends to a group as a group", async () => {
+    const GROUP = "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD";
+    const { port, seen } = await setup([
+      { body: { request_id: "request-1" }, status: 200 },
+      {
+        body: {
+          data: {
+            groups: [{ created_at: "1", id: GROUP, subject: "Launch team" }],
+          },
+        },
+        status: 200,
+      },
+      {
+        body: { invite_link: "https://chat.whatsapp.com/AbCd1234" },
+        status: 200,
+      },
+      {
+        body: { invite_link: "https://chat.whatsapp.com/EfGh5678" },
+        status: 200,
+      },
+      { body: { success: true }, status: 200 },
+      { body: { messages: [{ id: "wamid.group-sent" }] }, status: 200 },
+    ]);
+    expect(
+      await port.createGroup(TOKEN, PHONE_NUMBER_ID, "Launch team"),
+    ).toEqual({
+      requestId: "request-1",
+    });
+    expect(JSON.parse(seen[0]!.body)).toEqual({
+      messaging_product: "whatsapp",
+      subject: "Launch team",
+    });
+    expect(await port.groups(TOKEN, PHONE_NUMBER_ID)).toEqual([
+      { id: GROUP, subject: "Launch team" },
+    ]);
+    expect(await port.inviteLink(TOKEN, GROUP, false)).toBe(
+      "https://chat.whatsapp.com/AbCd1234",
+    );
+    expect(seen[2]!.method).toBe("GET");
+    expect(await port.inviteLink(TOKEN, GROUP, true)).toBe(
+      "https://chat.whatsapp.com/EfGh5678",
+    );
+    expect(seen[3]!.method).toBe("POST");
+    await port.deleteGroup(TOKEN, GROUP);
+    expect(seen[4]!.method).toBe("DELETE");
+    expect(
+      await port.send(
+        TOKEN,
+        PHONE_NUMBER_ID,
+        GROUP,
+        { text: "Hi", type: "text" },
+        "group",
+      ),
+    ).toBe("wamid.group-sent");
+    expect(JSON.parse(seen[5]!.body)).toMatchObject({
+      recipient_type: "group",
+      to: GROUP,
+    });
+    await expect(
+      port.send(
+        TOKEN,
+        PHONE_NUMBER_ID,
+        GROUP,
+        { body: "b", label: "Open", type: "cta", url: "https://x.example" },
+        "group",
+      ),
+    ).rejects.toThrow(/interactive/);
+    expect(messageBody(ALICE, { text: "Hi", type: "text" })).toMatchObject({
+      recipient_type: "individual",
+    });
+  });
 });

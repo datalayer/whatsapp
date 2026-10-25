@@ -7,7 +7,7 @@ import type {
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
 
 import type { AsPerson, Person } from "./as-person.js";
-import type { MetaPort, Outgoing } from "./meta-port.js";
+import { INTERACTIVE, type MetaPort, type Outgoing } from "./meta-port.js";
 import {
   openButton,
   renderAnswer,
@@ -31,6 +31,22 @@ import type { WindowKeeper } from "./window.js";
  * answer made into its messages (`answer`), with *Open in Datalayer* as a
  * one-use link for the person.
  */
+
+/**
+ * An answer's messages for a group: what a group takes (words, documents),
+ * and what only the person's own chat takes (buttons, lists, a link to
+ * Datalayer: no interactive message exists in a group, and a one-use link
+ * for one person is never shown to the others).
+ */
+export function forGroup(messages: readonly Outgoing[]): {
+  group: Outgoing[];
+  personal: Outgoing[];
+} {
+  return {
+    group: messages.filter((one) => !INTERACTIVE.has(one.type)),
+    personal: messages.filter((one) => INTERACTIVE.has(one.type)),
+  };
+}
 
 /** The spacing between the messages of one answer (Meta's pair rate limit). */
 export const PART_SPACING_MS = 10_000;
@@ -90,6 +106,32 @@ export class Speaker {
         installation.phoneNumberId,
         userId,
         message,
+      );
+      await this.deps.window.sent(installation.phoneNumberId, "service");
+    }
+  }
+
+  /**
+   * Send messages to a group in order, `spacingMs` apart; each counted as a
+   * service message (Meta counts one per participant it reaches, the same
+   * free tier). A group takes no interactive message: the caller sends
+   * those to the person's own chat (`forGroup`).
+   */
+  async sayInGroup(
+    installation: Installation,
+    groupId: string,
+    messages: readonly Outgoing[],
+    spacingMs = 0,
+  ): Promise<void> {
+    const token = this.token(installation);
+    for (const [index, message] of messages.entries()) {
+      if (index > 0 && spacingMs > 0) await this.deps.clock.sleep(spacingMs);
+      await this.deps.port.send(
+        token,
+        installation.phoneNumberId,
+        groupId,
+        message,
+        "group",
       );
       await this.deps.window.sent(installation.phoneNumberId, "service");
     }

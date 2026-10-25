@@ -9,6 +9,7 @@ import {
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
 
 import type { Approvals } from "./approvals.js";
+import { GROUP_WORDS, type GroupConversations } from "./groups.js";
 import type { AsPerson, Person } from "./as-person.js";
 import { targetSchema } from "./domain.js";
 import { decidedWords } from "./render.js";
@@ -91,6 +92,9 @@ export type DeliveryDependencies = Readonly<{
 }>;
 
 export class DeliveryHandler {
+  /** A group's conversations: where a group turn's answer is shown (set by the worker). */
+  groups?: GroupConversations;
+
   constructor(readonly deps: DeliveryDependencies) {}
 
   /** One delivery of an installation, handled once, then acknowledged at Datalayer. */
@@ -159,6 +163,35 @@ export class DeliveryHandler {
       target.data.userId,
       delivery.payload.deployment_uid,
     );
+    const { groupId } = target.data;
+    if (groupId !== undefined) {
+      const group = await this.deps.store.group(
+        installation.phoneNumberId,
+        groupId,
+      );
+      // A group deleted since: what it asked is said nowhere.
+      if (!group || group.state !== "active") return;
+      if (delivery.event === "turn.completed")
+        return this.showGroupAnswer(
+          installation,
+          groupId,
+          person,
+          delivery.payload.session_uid,
+        );
+      if (delivery.event === "approval.requested")
+        if (
+          await this.deps.store.claimEvent(
+            `group-approval:${installation.phoneNumberId}:${delivery.payload.approval_id}`,
+          )
+        )
+          // The card in the person's own chat (below), and a pointer in the group, once.
+          await this.deps.speaker.sayInGroup(installation, groupId, [
+            {
+              text: GROUP_WORDS.approval("", installation.businessName),
+              type: "text",
+            },
+          ]);
+    }
     switch (delivery.event) {
       case "approval.requested": {
         const appName = await this.appName(person);
@@ -213,6 +246,37 @@ export class DeliveryHandler {
         return;
       }
     }
+  }
+
+  /** A group turn's answer the worker did not show: shown once in the group. */
+  async showGroupAnswer(
+    installation: Installation,
+    groupId: string,
+    person: Person,
+    sessionUid: string,
+  ): Promise<void> {
+    const chat: ChatKey = {
+      phoneNumberId: installation.phoneNumberId,
+      userId: groupId,
+    };
+    const kept = await this.deps.store.chat(chat);
+    if (kept?.unshownSessionUid !== sessionUid || !this.groups) return;
+    const text = await this.deps.asPerson.lastAnswer(person, sessionUid);
+    const messages = await this.deps.speaker.answer(
+      installation,
+      person,
+      sessionUid,
+      text ?? "",
+    );
+    if (!(await this.deps.store.markShown(chat, sessionUid))) return;
+    await this.groups.show(
+      installation,
+      groupId,
+      person.userId,
+      undefined,
+      messages,
+      { sessionUid },
+    );
   }
 
   /** A session's last answer, shown once in the person's chat. */

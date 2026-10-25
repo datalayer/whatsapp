@@ -18,14 +18,25 @@ import { wamidHash } from "./store.js";
 /** The host kind Datalayer knows WhatsApp by. */
 export const HOST_KIND = "whatsapp";
 
-/** A 1:1 chat's turn: the business number, the person (their BSUID) and their message. */
+/**
+ * A turn: the business number, the person (their BSUID) and their message;
+ * in a group, the group's id too (the person is then the one who asked).
+ */
 export type WhatsAppTurn = Readonly<{
   wabaId: string;
   phoneNumberId: string;
   userId: string;
   /** The person's message, as Meta named it: sent to Datalayer as its hash only. */
   wamid: string;
+  /** The group the message was written in, by Meta's group id; none in a 1:1 chat. */
+  groupId?: string;
 }>;
+
+/**
+ * A group's id as Meta's Groups API gives it (`Y2FwaV9ncm91cDo…`, base64
+ * of the number's own group handle): printable, URL- and base64-safe.
+ */
+export const GROUP_ID = /^[A-Za-z0-9_=+/.-]{8,255}$/;
 
 export type WhatsAppTurnRequest = HostTurnRequest<WhatsAppTurn>;
 
@@ -41,39 +52,58 @@ export function externalIdOf(wabaId: string, phoneNumberId: string): string {
  */
 export const PLACE_ID_LIMIT = 255;
 
-/** A 1:1 chat is a direct place, named by the person's BSUID. */
-export function placeOf(turn: Pick<WhatsAppTurn, "userId">): Place {
+/**
+ * A 1:1 chat is a direct place, named by the person's BSUID; a group is a
+ * channel for Datalayer's rules (its channel rule, `direct_only`), named by
+ * the group's id.
+ */
+export function placeOf(turn: Pick<WhatsAppTurn, "userId" | "groupId">): Place {
+  if (turn.groupId !== undefined) {
+    if (!GROUP_ID.test(turn.groupId))
+      throw new Error("A group id no runtime takes as a place.");
+    return { id: turn.groupId, kind: "channel" };
+  }
   if (turn.userId.length > PLACE_ID_LIMIT)
     throw new Error("A BSUID longer than any place id a runtime takes.");
   return { id: turn.userId, kind: "direct" };
 }
 
-/** `whatsapp-<40 hex>` over the business account, the number and the person. */
+/**
+ * `whatsapp-<40 hex>` over the business account, the number and the person
+ * for a 1:1 chat, or the group's id for a group: one session per group,
+ * whoever asks in it.
+ */
 export function sessionUidOf(
-  turn: Pick<WhatsAppTurn, "wabaId" | "phoneNumberId" | "userId">,
+  turn: Pick<WhatsAppTurn, "wabaId" | "phoneNumberId" | "userId" | "groupId">,
   generation?: number,
 ): string {
   return hostSessionUid(
     HOST_KIND,
-    [turn.wabaId, turn.phoneNumberId, turn.userId],
+    [turn.wabaId, turn.phoneNumberId, turn.groupId ?? turn.userId],
     generation,
   );
 }
 
 /**
  * The delivery target handed back with every delivery: the number and the
- * person, validated again when it comes back (`targetSchema`).
+ * person, and the group when the turn was asked in one; validated again
+ * when it comes back (`targetSchema`).
  */
 export const targetSchema = z
   .object({
     phoneNumberId: z.string().regex(/^\d{1,32}$/),
     userId: z.string().regex(/^[\x21-\x7e]{1,255}$/),
+    groupId: z.string().regex(GROUP_ID).optional(),
   })
   .strict();
 export type DeliveryTarget = z.infer<typeof targetSchema>;
 
 export function targetOf(turn: WhatsAppTurn): DeliveryTarget {
-  return { phoneNumberId: turn.phoneNumberId, userId: turn.userId };
+  return {
+    phoneNumberId: turn.phoneNumberId,
+    userId: turn.userId,
+    ...(turn.groupId !== undefined ? { groupId: turn.groupId } : {}),
+  };
 }
 
 /** The `HostShape` injected into the shared agent client. */

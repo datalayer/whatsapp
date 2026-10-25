@@ -151,7 +151,8 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
     expect(given.verify_token).toBe(verifyTokenOf(VERIFY_SECRET, given.key));
     expect(given.verify_token).not.toBe(VERIFY_SECRET);
     expect(given.fields).toEqual([...WEBHOOK_FIELDS]);
-    expect(given.fields).toHaveLength(6);
+    // The messages, the five account fields and the Groups API's four.
+    expect(given.fields).toHaveLength(10);
     // The same key again: the same address, for a page opened again.
     expect(await address(given.key)).toEqual(given);
     expect((await address()).key).not.toBe(given.key);

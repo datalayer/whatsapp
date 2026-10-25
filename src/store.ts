@@ -91,7 +91,12 @@ export type Chat = ChatKey &
   }>;
 
 /** A question a turn ended on: its options, by the session that asked. */
-export type Asking = Readonly<{ sessionUid: string; options: string[] }>;
+export type Asking = Readonly<{
+  sessionUid: string;
+  options: string[];
+  /** In a person's own chat: the group the question came from (a press answers there). */
+  groupId?: string;
+}>;
 
 /** The one turn a chat runs at a time: who works it, until when, and its session once started. */
 export type RunningTurn = Readonly<{
@@ -134,6 +139,8 @@ export type Installation = Readonly<{
   privacy: string;
   state: InstallationState;
   removedAt?: Date;
+  /** When the number was last connected through Datalayer (kept by the store). */
+  installedAt?: Date;
   /**
    * The application developer's own Meta app the number is connected with
    * (Datalayer has none): the app's id, the key of its webhook address
@@ -199,6 +206,27 @@ export const RETENTION = {
   /** Quota counts, which name a person: their hour, and a day. */
   usageMs: 24 * 60 * 60 * 1000,
 } as const;
+
+/**
+ * A group the number created from the card (WA-22): Meta's group id once
+ * Meta gives it (at once, or in the `group_lifecycle_update` webhook), its
+ * subject, and its state. Nobody in it is kept: Meta's participant events
+ * name people by phone number, dropped at the ingress. Its invite link is
+ * read from Meta when the card asks, never kept.
+ */
+export type GroupState = "creating" | "active" | "suspended" | "failed";
+export type Group = Readonly<{
+  wabaId: string;
+  phoneNumberId: string;
+  /** The service's own id for the row: a group being created has no Meta id yet. */
+  ref: string;
+  groupId?: string;
+  /** Meta's id of the creation request, matched by its webhook. */
+  requestId?: string;
+  subject: string;
+  state: GroupState;
+  createdAt: Date;
+}>;
 
 /** What `retain` deleted, by table. */
 export type Retained = Record<string, number>;
@@ -328,6 +356,21 @@ export interface WhatsAppStore {
   markShown(key: ChatKey, sessionUid: string): Promise<boolean>;
   setAsking(key: ChatKey, asking: Asking | undefined): Promise<void>;
 
+  /** A group the number created from the card. */
+  saveGroup(group: Group): Promise<void>;
+  /** The number's groups, oldest first. */
+  groups(phoneNumberId: string): Promise<Group[]>;
+  /** A group of the number by Meta's id. */
+  group(phoneNumberId: string, groupId: string): Promise<Group | undefined>;
+  /** Meta's id or a new state for a group: `false` for an unknown one. */
+  updateGroup(
+    phoneNumberId: string,
+    ref: string,
+    change: Readonly<{ groupId?: string; state?: GroupState }>,
+  ): Promise<boolean>;
+  /** A group forgotten, with its chat (its session and turn): `false` for an unknown one. */
+  deleteGroup(phoneNumberId: string, ref: string): Promise<boolean>;
+
   /** A card shown; shown again (a new digest) it replaces the old one. */
   saveCard(card: ApprovalCardRow): Promise<void>;
   card(
@@ -356,6 +399,7 @@ export class MemoryStore implements WhatsAppStore {
   readonly #claims = new Map<string, Date>();
   readonly #installations = new Map<string, Installation>();
   readonly #cards = new Map<string, ApprovalCardRow>();
+  readonly #groups = new Map<string, Group>();
   /** Quota counts and queued jobs live in the kit's stores: memory keeps none here. */
 
   async applyStatus(update: StatusUpdate): Promise<void> {
@@ -578,7 +622,7 @@ export class MemoryStore implements WhatsAppStore {
   async saveInstallation(installation: Installation): Promise<void> {
     this.#installations.set(
       JSON.stringify([installation.wabaId, installation.phoneNumberId]),
-      installation,
+      { ...installation, installedAt: installation.installedAt ?? new Date() },
     );
   }
 
@@ -669,6 +713,11 @@ export class MemoryStore implements WhatsAppStore {
     for (const [key, status] of this.#statuses)
       if (status.phoneNumberId === phoneNumberId) {
         this.#statuses.delete(key);
+        count += 1;
+      }
+    for (const [key, group] of this.#groups)
+      if (group.phoneNumberId === phoneNumberId) {
+        this.#groups.delete(key);
         count += 1;
       }
     for (const key of this.#counts.keys())
@@ -796,6 +845,58 @@ export class MemoryStore implements WhatsAppStore {
       void _asking;
       return asking ? { ...rest, asking } : rest;
     });
+  }
+
+  async saveGroup(group: Group): Promise<void> {
+    this.#groups.set(JSON.stringify([group.phoneNumberId, group.ref]), group);
+  }
+
+  async groups(phoneNumberId: string): Promise<Group[]> {
+    return [...this.#groups.values()]
+      .filter((one) => one.phoneNumberId === phoneNumberId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+
+  async group(
+    phoneNumberId: string,
+    groupId: string,
+  ): Promise<Group | undefined> {
+    return [...this.#groups.values()].find(
+      (one) => one.phoneNumberId === phoneNumberId && one.groupId === groupId,
+    );
+  }
+
+  async updateGroup(
+    phoneNumberId: string,
+    ref: string,
+    change: Readonly<{ groupId?: string; state?: GroupState }>,
+  ): Promise<boolean> {
+    const key = JSON.stringify([phoneNumberId, ref]);
+    const kept = this.#groups.get(key);
+    if (!kept) return false;
+    if (
+      change.groupId !== undefined &&
+      [...this.#groups.values()].some(
+        (one) => one.groupId === change.groupId && one.ref !== ref,
+      )
+    )
+      throw new Error("A group id another row holds.");
+    this.#groups.set(key, {
+      ...kept,
+      ...(change.groupId !== undefined ? { groupId: change.groupId } : {}),
+      ...(change.state !== undefined ? { state: change.state } : {}),
+    });
+    return true;
+  }
+
+  async deleteGroup(phoneNumberId: string, ref: string): Promise<boolean> {
+    const key = JSON.stringify([phoneNumberId, ref]);
+    const kept = this.#groups.get(key);
+    if (!kept) return false;
+    this.#groups.delete(key);
+    if (kept.groupId !== undefined)
+      this.#chats.delete(chatKeyOf({ phoneNumberId, userId: kept.groupId }));
+    return true;
   }
 
   async saveCard(card: ApprovalCardRow): Promise<void> {

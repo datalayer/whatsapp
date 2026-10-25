@@ -1,6 +1,7 @@
 import type { Clock } from "@datalayer/agent-runtimes/lib/portable/hosts";
 import { z } from "zod";
 
+import { GROUP_ID } from "./domain.js";
 import type { Metrics } from "./observability.js";
 import type { NoticeTemplate } from "./window.js";
 
@@ -97,6 +98,42 @@ export type TokenGrant = Readonly<{
   accounts: readonly string[];
 }>;
 
+/** Who a message goes to: a person (their BSUID), or a group (its id). */
+export type RecipientType = "individual" | "group";
+
+/**
+ * A number's Official Business Account status, as Meta answers it
+ * (`GET /<phone_number_id>/official_business_account`): `NOT_STARTED`,
+ * `PENDING`, `UNDER_REVIEW`, `APPROVED`, `REJECTED`, `EXPIRED`,
+ * `CANCELLED` (read 25 October 2026), with Meta's own sentence.
+ */
+export type OfficialStatus = Readonly<{ status: string; message?: string }>;
+
+/** What a number and its account show of the Official Business Account's conditions. */
+export type NumberStanding = Readonly<{
+  /** The display name's review (`name_status`, beta at Meta): unreadable for some apps. */
+  nameStatus?: string;
+  /** The business portfolio's Business Verification, as the account shows it. */
+  businessVerification?: string;
+}>;
+
+/** What a request for the Official Business Account sends (Meta's update request). */
+export type OfficialRequest = Readonly<{
+  /** The business's own website (https). */
+  website: string;
+  /** Where the business mainly operates. */
+  country: string;
+  language?: string;
+  /** Pages that show the business is known: 5 to 10, or none. */
+  links?: readonly string[];
+}>;
+
+/** A group the number created, as Meta lists it. */
+export type MetaGroup = Readonly<{ id: string; subject: string }>;
+
+/** What Meta answered a group's creation: its request, and its id when given at once. */
+export type GroupCreation = Readonly<{ requestId?: string; groupId?: string }>;
+
 /** The two permissions the app's system user token needs. */
 export const TOKEN_SCOPES = [
   "whatsapp_business_messaging",
@@ -115,6 +152,18 @@ export const META_CODES = {
   templateExists: 2388024,
   /** The number has a two-step verification PIN, and it is not the one given. */
   pinMismatch: 133005,
+  /** The group is not one of the number's, or the number left it. */
+  groupUnknown: 131041,
+  /** The group was suspended for WhatsApp's policies. */
+  groupSuspended: 131207,
+  /** Too many group operations from this number just now. */
+  groupRateLimited: 131208,
+  /** The number made its 10,000 groups. */
+  groupLimit: 131211,
+  /** Group creation paused for the account's marketing messages. */
+  groupCreationPaused: 131214,
+  /** The number may not use the Groups API: it is not an Official Business Account. */
+  groupsNotEligible: 131215,
 } as const;
 
 /** What Meta refused, with its code: never the request's token or body. */
@@ -145,12 +194,17 @@ export class MetaError extends Error {
 }
 
 export interface MetaPort {
-  /** Send one message to a person (their BSUID): the sent message's id. */
+  /**
+   * Send one message to a person (their BSUID), or to a group (its id, with
+   * `recipientType` `group`): the sent message's id. A group takes no
+   * interactive message.
+   */
   send(
     token: string,
     phoneNumberId: string,
     userId: string,
     message: Outgoing,
+    recipientType?: RecipientType,
   ): Promise<string>;
   /** Mark the person's message read, with the typing indicator (25 seconds at most). */
   markRead(token: string, phoneNumberId: string, wamid: string): Promise<void>;
@@ -187,7 +241,44 @@ export interface MetaPort {
     wabaId: string,
     template: NoticeTemplate,
   ): Promise<TemplateState>;
+  /** The number's Official Business Account status. */
+  officialStatus(token: string, phoneNumberId: string): Promise<OfficialStatus>;
+  /** Ask Meta for the number's Official Business Account: the status it answers. */
+  requestOfficial(
+    token: string,
+    phoneNumberId: string,
+    request: OfficialRequest,
+  ): Promise<OfficialStatus>;
+  /** What the number and its account show of the conditions; each unreadable one left out. */
+  standing(
+    token: string,
+    wabaId: string,
+    phoneNumberId: string,
+  ): Promise<NumberStanding>;
+  /** A group created by the number (invite-only): its request, and its id when Meta gives it at once. */
+  createGroup(
+    token: string,
+    phoneNumberId: string,
+    subject: string,
+  ): Promise<GroupCreation>;
+  /** The number's active groups, at most 1,024. */
+  groups(token: string, phoneNumberId: string): Promise<MetaGroup[]>;
+  /** A group's invite link (`https://chat.whatsapp.com/…`); `reset` makes a new one, every older link dead. */
+  inviteLink(token: string, groupId: string, reset: boolean): Promise<string>;
+  /** The group deleted: every participant removed, the number too. */
+  deleteGroup(token: string, groupId: string): Promise<void>;
 }
+
+/** Where every invite link Meta gives starts. */
+export const INVITE_LINK =
+  /^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]{4,128}$/;
+
+/** The interactive messages, which no group takes. */
+export const INTERACTIVE: ReadonlySet<Outgoing["type"]> = new Set([
+  "buttons",
+  "list",
+  "cta",
+]);
 
 /**
  * Where a message names its person. Since Meta's business-scoped user ids,
@@ -200,10 +291,11 @@ export const RECIPIENT_FIELD = "to";
 export function messageBody(
   userId: string,
   message: Outgoing,
+  recipientType: RecipientType = "individual",
 ): Record<string, unknown> {
   const base = {
     messaging_product: "whatsapp",
-    recipient_type: "individual",
+    recipient_type: recipientType,
     [RECIPIENT_FIELD]: userId,
   };
   switch (message.type) {
@@ -303,10 +395,15 @@ export function messageBody(
 }
 
 /** Throws when a message breaks one of WhatsApp's limits: the renderer keeps to them. */
-export function checkLimits(message: Outgoing): void {
+export function checkLimits(
+  message: Outgoing,
+  recipientType: RecipientType = "individual",
+): void {
   const fail = (what: string) => {
     throw new Error(`A WhatsApp message beyond its limits: ${what}.`);
   };
+  if (recipientType === "group" && INTERACTIVE.has(message.type))
+    fail("an interactive message in a group");
   switch (message.type) {
     case "text":
       if (!message.text || message.text.length > LIMITS.text) fail("text");
@@ -423,14 +520,15 @@ export class HttpMetaPort implements MetaPort {
     phoneNumberId: string,
     userId: string,
     message: Outgoing,
+    recipientType: RecipientType = "individual",
   ): Promise<string> {
-    checkLimits(message);
+    checkLimits(message, recipientType);
     for (let attempt = 0; ; attempt += 1) {
       try {
         const sent = await this.#call(
           "The message was not sent",
           `/${encodeURIComponent(phoneNumberId)}/messages`,
-          { json: messageBody(userId, message), token },
+          { json: messageBody(userId, message, recipientType), token },
           z
             .object({ messages: z.array(z.object({ id: z.string() })).min(1) })
             .loose(),
@@ -636,4 +734,188 @@ export class HttpMetaPort implements MetaPort {
     const one = kept.data[0]!;
     return { category: one.category, status: one.status };
   }
+
+  async officialStatus(
+    token: string,
+    phoneNumberId: string,
+  ): Promise<OfficialStatus> {
+    return officialOf(
+      await this.#call(
+        "The number's Official Business Account status was not read",
+        `/${encodeURIComponent(phoneNumberId)}/official_business_account`,
+        { query: { fields: "oba_status,status_message" }, token },
+        officialSchema,
+      ),
+    );
+  }
+
+  async requestOfficial(
+    token: string,
+    phoneNumberId: string,
+    request: OfficialRequest,
+  ): Promise<OfficialStatus> {
+    const answered = await this.#call(
+      "The Official Business Account was not requested",
+      `/${encodeURIComponent(phoneNumberId)}/official_business_account`,
+      {
+        json: {
+          business_website_url: request.website,
+          primary_country_of_operation: request.country,
+          ...(request.language ? { primary_language: request.language } : {}),
+          ...(request.links?.length
+            ? { supporting_links: [...request.links] }
+            : {}),
+        },
+        token,
+      },
+      z
+        .object({
+          success: z.boolean().optional(),
+          updated_status: officialSchema.optional(),
+        })
+        .loose(),
+    );
+    return answered.updated_status
+      ? officialOf(answered.updated_status)
+      : { status: "PENDING" };
+  }
+
+  async standing(
+    token: string,
+    wabaId: string,
+    phoneNumberId: string,
+  ): Promise<NumberStanding> {
+    // Each read on its own: `name_status` is in beta at Meta, and an app
+    // may not read the account's verification; what is unreadable is left out.
+    const read = async <T>(work: () => Promise<T>): Promise<T | undefined> => {
+      try {
+        return await work();
+      } catch (error) {
+        if (error instanceof MetaError && !error.tokenRefused) return undefined;
+        throw error;
+      }
+    };
+    const name = await read(() =>
+      this.#call(
+        "The display name's status was not read",
+        `/${encodeURIComponent(phoneNumberId)}`,
+        { query: { fields: "name_status" }, token },
+        z.object({ name_status: z.string().optional() }).loose(),
+      ),
+    );
+    const account = await read(() =>
+      this.#call(
+        "The business verification was not read",
+        `/${encodeURIComponent(wabaId)}`,
+        { query: { fields: "business_verification_status" }, token },
+        z
+          .object({ business_verification_status: z.string().optional() })
+          .loose(),
+      ),
+    );
+    return {
+      ...(name?.name_status ? { nameStatus: name.name_status } : {}),
+      ...(account?.business_verification_status
+        ? { businessVerification: account.business_verification_status }
+        : {}),
+    };
+  }
+
+  async createGroup(
+    token: string,
+    phoneNumberId: string,
+    subject: string,
+  ): Promise<GroupCreation> {
+    const answered = await this.#call(
+      "The group was not created",
+      `/${encodeURIComponent(phoneNumberId)}/groups`,
+      { json: { messaging_product: "whatsapp", subject }, token },
+      z
+        .object({
+          request_id: z.string().optional(),
+          id: z.string().optional(),
+          group_id: z.string().optional(),
+        })
+        .loose(),
+    );
+    const groupId = answered.group_id ?? answered.id;
+    return {
+      ...(answered.request_id ? { requestId: answered.request_id } : {}),
+      ...(groupId && GROUP_ID.test(groupId) ? { groupId } : {}),
+    };
+  }
+
+  async groups(token: string, phoneNumberId: string): Promise<MetaGroup[]> {
+    const answered = await this.#call(
+      "The number's groups were not read",
+      `/${encodeURIComponent(phoneNumberId)}/groups`,
+      { query: { limit: "1024" }, token },
+      z
+        .object({
+          data: z
+            .object({
+              groups: z
+                .array(
+                  z
+                    .object({ id: z.string(), subject: z.string().optional() })
+                    .loose(),
+                )
+                .optional(),
+            })
+            .loose(),
+        })
+        .loose(),
+    );
+    return (answered.data.groups ?? [])
+      .filter((one) => GROUP_ID.test(one.id))
+      .map((one) => ({ id: one.id, subject: one.subject ?? "" }));
+  }
+
+  async inviteLink(
+    token: string,
+    groupId: string,
+    reset: boolean,
+  ): Promise<string> {
+    const answered = await this.#call(
+      reset
+        ? "The group's invite link was not reset"
+        : "The group's invite link was not read",
+      `/${encodeURIComponent(groupId)}/invite_link`,
+      reset ? { json: { messaging_product: "whatsapp" }, token } : { token },
+      z.object({ invite_link: z.string().regex(INVITE_LINK) }).loose(),
+    );
+    return answered.invite_link;
+  }
+
+  async deleteGroup(token: string, groupId: string): Promise<void> {
+    await this.#call(
+      "The group was not deleted",
+      `/${encodeURIComponent(groupId)}`,
+      { method: "DELETE", token },
+      z.unknown(),
+    );
+  }
+}
+
+const officialSchema = z
+  .object({
+    oba_status: z.string().optional(),
+    status_message: z.string().optional(),
+    official_business_account: z
+      .object({ oba_status: z.string().optional() })
+      .loose()
+      .optional(),
+  })
+  .loose();
+
+/** Meta's answer, as one status: `NOT_STARTED` when it names none. */
+function officialOf(answered: z.infer<typeof officialSchema>): OfficialStatus {
+  const status =
+    answered.oba_status ??
+    answered.official_business_account?.oba_status ??
+    "NOT_STARTED";
+  return {
+    status: status.toUpperCase(),
+    ...(answered.status_message ? { message: answered.status_message } : {}),
+  };
 }

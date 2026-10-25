@@ -63,6 +63,9 @@ The design; the State column of the threats below says what is built.
 | Quota counts naming a BSUID                               | `whatsapp_usage`                             | 24 hours                                                              |
 | Messages sent per number and month, by category           | `whatsapp_message_count`                     | no person named                                                       |
 | Template statuses per business account                    | `whatsapp_template`                          | until removal                                                         |
+| A group the card created: its id, subject, state          | `whatsapp_group` (no participant, no link)   | until deleted from the card or at Meta; purged with the number        |
+| A group's conversation: its session, its turn             | `whatsapp_chat`, named by the group's id     | 30 days after the group's last message; deleted with the group        |
+| The owner's Datalayer token (the card's group calls)      | memory, for the call: shown to ai-agents     | never written or logged                                               |
 | Business token, host key, two-step PIN, the app's secret  | the installation, encrypted (`SecretCipher`) | until disconnect; purged 24 hours after                               |
 | Verify secret, token encryption key, log salt             | the Secret and memory only                   | until rotated                                                         |
 | A person's rows after `forget`                            | every `whatsapp_*` row naming their BSUID    | deleted at once                                                       |

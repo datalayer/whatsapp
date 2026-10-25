@@ -7,6 +7,8 @@ import {
   STATUS_RANK,
   type ApprovalCardRow,
   type Asking,
+  type Group,
+  type GroupState,
   type Installation,
   type InstallationState,
   type RunningTurn,
@@ -93,6 +95,31 @@ function chatOf(row: ChatRow): Chat {
   };
 }
 
+type GroupRow = {
+  phone_number_id: string;
+  ref: string;
+  waba_id: string;
+  group_id: string | null;
+  request_id: string | null;
+  subject: string;
+  state: GroupState;
+  created_at: Date;
+};
+
+const GROUP_COLUMNS =
+  "phone_number_id, ref, waba_id, group_id, request_id, subject, state, created_at";
+
+const groupOf = (row: GroupRow): Group => ({
+  createdAt: row.created_at,
+  phoneNumberId: row.phone_number_id,
+  ref: row.ref,
+  state: row.state,
+  subject: row.subject,
+  wabaId: row.waba_id,
+  ...(row.group_id !== null ? { groupId: row.group_id } : {}),
+  ...(row.request_id !== null ? { requestId: row.request_id } : {}),
+});
+
 type InstallationRow = {
   waba_id: string;
   phone_number_id: string;
@@ -110,6 +137,7 @@ type InstallationRow = {
   app_id: string;
   app_secret: EncryptedSecret | null;
   webhook_key: string | null;
+  installed_at?: Date | null;
 };
 
 const INSTALLATION_COLUMNS = `waba_id, phone_number_id, host_uid, host_key, business_token,
@@ -131,6 +159,7 @@ function installationOf(row: InstallationRow): Installation {
     ...(row.pin ? { pin: row.pin } : {}),
     ...(row.delivery_secret ? { deliverySecret: row.delivery_secret } : {}),
     ...(row.removed_at ? { removedAt: row.removed_at } : {}),
+    ...(row.installed_at ? { installedAt: row.installed_at } : {}),
     app: {
       appId: row.app_id,
       ...(row.webhook_key ? { webhookKey: row.webhook_key } : {}),
@@ -535,7 +564,7 @@ export class PostgresStore implements WhatsAppStore {
     phoneNumberId: string,
   ): Promise<Installation | undefined> {
     const { rows } = await this.database.query<InstallationRow>(
-      `SELECT ${INSTALLATION_COLUMNS} FROM whatsapp_installation
+      `SELECT ${INSTALLATION_COLUMNS}, installed_at FROM whatsapp_installation
         WHERE waba_id = $1 AND phone_number_id = $2`,
       [wabaId, phoneNumberId],
     );
@@ -544,7 +573,7 @@ export class PostgresStore implements WhatsAppStore {
 
   async installationByHost(hostUid: string): Promise<Installation | undefined> {
     const { rows } = await this.database.query<InstallationRow>(
-      `SELECT ${INSTALLATION_COLUMNS} FROM whatsapp_installation WHERE host_uid = $1`,
+      `SELECT ${INSTALLATION_COLUMNS}, installed_at FROM whatsapp_installation WHERE host_uid = $1`,
       [hostUid],
     );
     return rows[0] ? installationOf(rows[0]) : undefined;
@@ -554,7 +583,7 @@ export class PostgresStore implements WhatsAppStore {
     key: string,
   ): Promise<Installation | undefined> {
     const { rows } = await this.database.query<InstallationRow>(
-      `SELECT ${INSTALLATION_COLUMNS} FROM whatsapp_installation WHERE webhook_key = $1`,
+      `SELECT ${INSTALLATION_COLUMNS}, installed_at FROM whatsapp_installation WHERE webhook_key = $1`,
       [key],
     );
     return rows[0] ? installationOf(rows[0]) : undefined;
@@ -562,7 +591,7 @@ export class PostgresStore implements WhatsAppStore {
 
   async installations(state?: InstallationState): Promise<Installation[]> {
     const { rows } = await this.database.query<InstallationRow>(
-      `SELECT ${INSTALLATION_COLUMNS} FROM whatsapp_installation
+      `SELECT ${INSTALLATION_COLUMNS}, installed_at FROM whatsapp_installation
         WHERE $1::text IS NULL OR state = $1 ORDER BY waba_id, phone_number_id`,
       [state ?? null],
     );
@@ -613,6 +642,7 @@ export class PostgresStore implements WhatsAppStore {
       "whatsapp_approval_card",
       "whatsapp_message_status",
       "whatsapp_message_count",
+      "whatsapp_group",
     ])
       count += await deleted(
         `DELETE FROM ${table} WHERE phone_number_id = $1`,
@@ -813,5 +843,73 @@ export class PostgresStore implements WhatsAppStore {
         WHERE phone_number_id = $1 AND user_id = $2 AND approval_id = $3`,
       [phoneNumberId, userId, approvalId, status],
     );
+  }
+
+  async saveGroup(group: Group): Promise<void> {
+    await this.database.query(
+      `INSERT INTO whatsapp_group (${GROUP_COLUMNS})
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        group.phoneNumberId,
+        group.ref,
+        group.wabaId,
+        group.groupId ?? null,
+        group.requestId ?? null,
+        group.subject,
+        group.state,
+        group.createdAt,
+      ],
+    );
+  }
+
+  async groups(phoneNumberId: string): Promise<Group[]> {
+    const { rows } = await this.database.query<GroupRow>(
+      `SELECT ${GROUP_COLUMNS} FROM whatsapp_group
+        WHERE phone_number_id = $1 ORDER BY created_at, ref`,
+      [phoneNumberId],
+    );
+    return rows.map(groupOf);
+  }
+
+  async group(
+    phoneNumberId: string,
+    groupId: string,
+  ): Promise<Group | undefined> {
+    const { rows } = await this.database.query<GroupRow>(
+      `SELECT ${GROUP_COLUMNS} FROM whatsapp_group
+        WHERE phone_number_id = $1 AND group_id = $2`,
+      [phoneNumberId, groupId],
+    );
+    return rows[0] ? groupOf(rows[0]) : undefined;
+  }
+
+  async updateGroup(
+    phoneNumberId: string,
+    ref: string,
+    change: Readonly<{ groupId?: string; state?: GroupState }>,
+  ): Promise<boolean> {
+    const { rowCount } = await this.database.query(
+      `UPDATE whatsapp_group
+          SET group_id = COALESCE($3, group_id), state = COALESCE($4, state),
+              updated_at = now()
+        WHERE phone_number_id = $1 AND ref = $2`,
+      [phoneNumberId, ref, change.groupId ?? null, change.state ?? null],
+    );
+    return rowCount === 1;
+  }
+
+  async deleteGroup(phoneNumberId: string, ref: string): Promise<boolean> {
+    const { rows } = await this.database.query<{ group_id: string | null }>(
+      `DELETE FROM whatsapp_group WHERE phone_number_id = $1 AND ref = $2
+        RETURNING group_id`,
+      [phoneNumberId, ref],
+    );
+    if (!rows[0]) return false;
+    if (rows[0].group_id !== null)
+      await this.database.query(
+        "DELETE FROM whatsapp_chat WHERE phone_number_id = $1 AND user_id = $2",
+        [phoneNumberId, rows[0].group_id],
+      );
+    return true;
   }
 }

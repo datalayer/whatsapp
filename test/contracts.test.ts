@@ -38,6 +38,8 @@ const WHATSAPP = (
       external_user_id_longest: string;
       direct: { place: { kind: string; id: string } };
       session: { parts: [string, string, string]; uid: string };
+      group: { id: string; place: { kind: string; id: string } };
+      group_session: { parts: [string, string, string]; uid: string };
       provenance: {
         host_kind: string;
         place: { kind: string; id: string };
@@ -67,6 +69,16 @@ describe("WhatsApp's forms of the host contracts", () => {
     expect(sessionUidOf({ phoneNumberId, userId, wabaId })).toBe(
       WHATSAPP.session.uid,
     );
+  });
+
+  it("derives a group's one session uid from the contract's parts, and names it a channel", () => {
+    const [wabaId, phoneNumberId, groupId] = WHATSAPP.group_session.parts;
+    expect(
+      sessionUidOf({ groupId, phoneNumberId, userId: turn.userId, wabaId }),
+    ).toBe(WHATSAPP.group_session.uid);
+    expect(
+      placeOf({ groupId: WHATSAPP.group.id, userId: turn.userId }),
+    ).toEqual(WHATSAPP.group.place);
   });
 
   it("names a chat as a direct place by the BSUID, the longest one too", () => {

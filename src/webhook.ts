@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 
+import { GROUP_ID } from "./domain.js";
 import { PHONE_FIELDS } from "./observability.js";
 import type { Routes } from "./server.js";
 import {
@@ -92,6 +93,13 @@ export type MessageJob = Readonly<{
   replyTo?: string;
   /** A system message: its type, and the person's new BSUID when Meta gives one. */
   system?: Readonly<{ type: string; newUserId?: string }>;
+  /** A message written in a group the number created: the group's id. */
+  groupId?: string;
+  /**
+   * In a group: whether the message @-mentions the number (its text names
+   * the number's own display number after `@`). The number is not kept.
+   */
+  mentioned?: boolean;
 }>;
 
 /** An event about the business's account, number or templates, for the worker. */
@@ -104,7 +112,32 @@ export type AccountJob = Readonly<{
   value: unknown;
 }>;
 
-export type WhatsAppJob = MessageJob | AccountJob;
+/**
+ * What happened to the number's groups (`group_lifecycle_update`,
+ * `group_status_update`, `group_participants_update`,
+ * `group_settings_update`): each event's type, its group and request, and
+ * whether Meta refused it; never a participant, never an invite link.
+ */
+export type GroupEvent = Readonly<{
+  type: string;
+  groupId?: string;
+  requestId?: string;
+  subject?: string;
+  /** Meta refused the request (a creation or a deletion that failed): its code. */
+  errorCode?: number;
+  failed: boolean;
+  /** How many people joined or left, for a participants event. */
+  participants?: number;
+}>;
+export type GroupJob = Readonly<{
+  kind: "group";
+  field: string;
+  wabaId: string;
+  phoneNumberId: string;
+  events: readonly GroupEvent[];
+}>;
+
+export type WhatsAppJob = MessageJob | AccountJob | GroupJob;
 
 /** The account fields the worker is handed; every other field is ignored. */
 export const ACCOUNT_FIELDS = [
@@ -115,11 +148,23 @@ export const ACCOUNT_FIELDS = [
   "template_category_update",
 ] as const;
 
+/** The Groups API's fields (read 25 October 2026): its groups' events. */
+export const GROUP_FIELDS = [
+  "group_lifecycle_update",
+  "group_participants_update",
+  "group_settings_update",
+  "group_status_update",
+] as const;
+
 /**
  * The webhook fields each application's own Meta app subscribes: the
- * messages and their statuses, and the account's events.
+ * messages and their statuses, the account's events, and its groups'.
  */
-export const WEBHOOK_FIELDS = ["messages", ...ACCOUNT_FIELDS] as const;
+export const WEBHOOK_FIELDS = [
+  "messages",
+  ...ACCOUNT_FIELDS,
+  ...GROUP_FIELDS,
+] as const;
 
 const id = z.string().min(1).max(512);
 const media = z
@@ -161,6 +206,7 @@ const messageSchema = z
       .loose()
       .optional(),
     context: z.object({ id: id.optional() }).loose().optional(),
+    group_id: z.string().optional(),
     system: z
       .object({
         type: z.string(),
@@ -181,7 +227,12 @@ const statusSchema = z
   .loose();
 const messagesValueSchema = z
   .object({
-    metadata: z.object({ phone_number_id: id }).loose(),
+    metadata: z
+      .object({
+        phone_number_id: id,
+        display_phone_number: z.string().optional(),
+      })
+      .loose(),
     contacts: z
       .array(
         z
@@ -216,6 +267,48 @@ const webhookSchema = z
   })
   .loose();
 
+const groupsValueSchema = z
+  .object({
+    metadata: z.object({ phone_number_id: id }).loose(),
+    groups: z
+      .array(
+        z
+          .object({
+            type: z.string().max(64),
+            group_id: z.string().optional(),
+            request_id: z.string().optional(),
+            subject: z.string().optional(),
+            errors: z.array(z.object({ code: z.unknown() }).loose()).optional(),
+            added_participants: z.array(z.unknown()).optional(),
+            removed_participants: z.array(z.unknown()).optional(),
+          })
+          .loose(),
+      )
+      .optional(),
+  })
+  .loose();
+
+/** One group event, without any person in it, nor the invite link. */
+function groupEventOf(
+  one: NonNullable<z.infer<typeof groupsValueSchema>["groups"]>[number],
+): GroupEvent {
+  const code = Number(one.errors?.[0]?.code);
+  const participants =
+    (one.added_participants?.length ?? 0) +
+    (one.removed_participants?.length ?? 0);
+  return {
+    failed: Boolean(one.errors?.length),
+    type: one.type,
+    ...(one.group_id && GROUP_ID.test(one.group_id)
+      ? { groupId: one.group_id }
+      : {}),
+    ...(one.request_id ? { requestId: one.request_id.slice(0, 256) } : {}),
+    ...(one.subject ? { subject: one.subject.slice(0, 128) } : {}),
+    ...(Number.isInteger(code) ? { errorCode: code } : {}),
+    ...(participants ? { participants } : {}),
+  };
+}
+
 /** What one webhook carries, normalized: what to claim, what to keep, what was set aside. */
 export type Normalized = {
   jobs: { job: WhatsAppJob; key: string }[];
@@ -243,11 +336,25 @@ const isoOf = (seconds: string): string =>
 const sha256 = (value: string): string =>
   createHash("sha256").update(value).digest("hex");
 
+/** Whether a group message's text @-mentions the number, by its own display number. */
+export function mentions(
+  text: string | undefined,
+  displayNumber?: string,
+): boolean {
+  const digits = (displayNumber ?? "").replace(/\D/g, "");
+  if (!text || digits.length < 6) return false;
+  return (
+    text.replace(/[\s\u2066-\u2069]/g, "").includes(`@${digits}`) ||
+    text.replace(/[\s\u2066-\u2069]/g, "").includes(`@+${digits}`)
+  );
+}
+
 function messageJob(
   wabaId: string,
   phoneNumberId: string,
   message: z.infer<typeof messageSchema>,
   contacts: z.infer<typeof messagesValueSchema>["contacts"],
+  displayNumber?: string,
 ): MessageJob | undefined {
   // The sender's contact: the one Meta names by the same wa_id, else the only one.
   const contact =
@@ -272,6 +379,10 @@ function messageJob(
     message.sticker;
   const text = message.text?.body ?? message.button?.text;
   const name = contact?.profile?.name;
+  const groupId =
+    message.group_id && GROUP_ID.test(message.group_id)
+      ? message.group_id
+      : undefined;
   return {
     kind: "message",
     wabaId,
@@ -303,6 +414,12 @@ function messageJob(
         }
       : {}),
     ...(message.context?.id ? { replyTo: message.context.id } : {}),
+    ...(groupId
+      ? {
+          groupId,
+          mentioned: mentions(text ?? mediaOf?.caption, displayNumber),
+        }
+      : {}),
     ...(message.system
       ? {
           system: {
@@ -340,6 +457,7 @@ export function normalize(body: unknown, appId: string): Normalized {
             phoneNumberId,
             message,
             value.contacts,
+            value.metadata.display_phone_number,
           );
           // Claimed by the id's hash: the id may embed a phone number.
           if (job)
@@ -362,6 +480,20 @@ export function normalize(body: unknown, appId: string): Normalized {
             ...(code !== undefined ? { errorCode: code } : {}),
           });
         }
+      } else if ((GROUP_FIELDS as readonly string[]).includes(change.field)) {
+        const value = groupsValueSchema.parse(change.value);
+        const events = (value.groups ?? []).map(groupEventOf);
+        const job: GroupJob = {
+          events,
+          field: change.field,
+          kind: "group",
+          phoneNumberId: value.metadata.phone_number_id,
+          wabaId,
+        };
+        out.jobs.push({
+          job,
+          key: `group:${sha256(JSON.stringify([wabaId, job.phoneNumberId, change.field, value.groups ?? []]))}`,
+        });
       } else if ((ACCOUNT_FIELDS as readonly string[]).includes(change.field)) {
         const value = withoutPhoneNumbers(change.value);
         out.jobs.push({

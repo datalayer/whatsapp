@@ -14,6 +14,7 @@ import { readConfig } from "./config.js";
 import { deliverySinkOf } from "./deliveries.js";
 import { whatsappShape, type WhatsAppTurn } from "./domain.js";
 import { installRoutes } from "./install.js";
+import { manageRoutes, ownerCheckOf } from "./manage.js";
 import { HttpMetaPort } from "./meta-port.js";
 import { Metrics, WhatsAppLogger } from "./observability.js";
 import { purgeRemoved, reconcile } from "./removal.js";
@@ -99,6 +100,15 @@ const routes: Routes =
           verifySecret: config.DATALAYER_WHATSAPP_VERIFY_SECRET,
           webUrl: config.DATALAYER_WEB_URL,
           window,
+        }),
+        ...manageRoutes({
+          cipher,
+          logger,
+          now: () => Date.now(),
+          owner: ownerCheckOf(config.DATALAYER_API_URL),
+          port,
+          store,
+          webUrl: config.DATALAYER_WEB_URL,
         }),
         [`POST ${DELIVERY_ROUTE}`]: deliveryRoute(
           deliverySinkOf(store, cipher),

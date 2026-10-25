@@ -32,6 +32,7 @@ import {
   type Standing,
 } from "./commands.js";
 import { DeliveryHandler, type DeliveryQueueJob } from "./deliveries.js";
+import { GroupConversations } from "./groups.js";
 import {
   externalIdOf,
   type WhatsAppTurn,
@@ -63,7 +64,12 @@ import {
   type Installation,
   type WhatsAppStore,
 } from "./store.js";
-import type { AccountJob, MessageJob, WhatsAppJob } from "./webhook.js";
+import type {
+  AccountJob,
+  GroupJob,
+  MessageJob,
+  WhatsAppJob,
+} from "./webhook.js";
 import { TEMPLATE_FIELDS, type WindowKeeper } from "./window.js";
 
 /**
@@ -154,6 +160,7 @@ export class Worker {
   readonly speaker: Speaker;
   readonly approvals: Approvals;
   readonly deliveries: DeliveryHandler;
+  readonly groups: GroupConversations;
 
   constructor(readonly deps: WorkerDependencies) {
     this.instance = deps.instance ?? randomBytes(6).toString("hex");
@@ -184,6 +191,8 @@ export class Worker {
       store: deps.store,
       window: deps.window,
     });
+    this.groups = new GroupConversations(this);
+    this.deliveries.groups = this.groups;
   }
 
   async handle(job: WhatsAppJob | DeliveryQueueJob): Promise<void> {
@@ -192,6 +201,8 @@ export class Worker {
         return this.message(job);
       case "account":
         return this.account(job);
+      case "group":
+        return this.group(job);
       case "delivery":
         return this.#guarded(
           await this.deps.store.installationByHost(job.hostUid),
@@ -277,6 +288,15 @@ export class Worker {
     logger.info("account.event", { field: job.field });
   }
 
+  /** An event of the number's groups: created, deleted, suspended. */
+  async group(job: GroupJob): Promise<void> {
+    const installation = await this.deps.store.installation(
+      job.wabaId,
+      job.phoneNumberId,
+    );
+    await this.#guarded(installation, () => this.groups.event(job));
+  }
+
   async message(job: MessageJob): Promise<void> {
     const installation = await this.deps.store.installation(
       job.wabaId,
@@ -305,6 +325,13 @@ export class Worker {
 
   async #message(job: MessageJob, installation: Installation): Promise<void> {
     const { store, clock, logger } = this.deps;
+    // A group's message opens no 1:1 window: the group answers itself.
+    if (job.groupId !== undefined)
+      return this.groups.message(
+        { ...job, groupId: job.groupId },
+        installation,
+        this.#hostKey(installation),
+      );
     const chat = {
       phoneNumberId: job.phoneNumberId,
       userId: job.userId,
@@ -412,6 +439,19 @@ export class Worker {
       ""
     ).trim();
     if (!prompt) return say([text(WORDS.textOnly)]);
+    // An option of a question asked in a group: answered in the group.
+    const pressed = optionOf(job.reply?.id, kept?.asking?.options);
+    if (pressed !== undefined && kept?.asking?.groupId) {
+      const groupId = kept.asking.groupId;
+      await store.setAsking(chat, undefined);
+      const { reply: _reply, ...rest } = job;
+      void _reply;
+      return this.groups.message(
+        { ...rest, groupId, mentioned: true, text: pressed },
+        installation,
+        hostKey,
+      );
+    }
     await this.#ask(
       job,
       installation,
@@ -538,7 +578,7 @@ export class Worker {
       return say([text(WORDS.busy)]);
     }
     try {
-      const refused = await this.#charge(
+      const refused = await this.charge(
         job,
         installation,
         resolution.applicationId,
@@ -562,7 +602,7 @@ export class Worker {
    * quota for this message, once: what is said when one is spent. Claimed
    * by the message before it is taken, so a retried job goes on uncharged.
    */
-  async #charge(
+  async charge(
     job: MessageJob,
     installation: Installation,
     applicationId: string,
