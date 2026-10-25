@@ -12,7 +12,9 @@
 #        a number already on the Cloud API not registered again (4c711a6, a1ee140).
 # 0.1.4: one way to connect a number, each application's own Meta app; Datalayer has no Meta app
 #        (no app id, secret or verify token; a chart-generated verify secret) (3eafc54).
-VERSION ?= 0.1.4
+# 0.1.5: groups (create, invite link, on/off, answer when named) and the Official Business Account status
+#        and request from the card; migration 008 (1b5b911).
+VERSION ?= 0.1.5
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 
