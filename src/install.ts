@@ -103,6 +103,12 @@ const requestSchema = z
     token: z.string().regex(/^[A-Za-z0-9_|.-]{20,4096}$/),
     /** Which number, when the token reaches several. */
     phone_number_id: metaId.optional(),
+    /**
+     * The WhatsApp business account, when the token's grants name none: Meta
+     * leaves the account ids out of a system user's grant that covers every
+     * account assigned to it.
+     */
+    waba_id: metaId.optional(),
     /** The number's own two-step verification PIN, when it has one already. */
     pin: z
       .string()
@@ -147,7 +153,9 @@ export const INSTALL_WORDS = {
   tokenPermissions:
     "That access token lacks whatsapp_business_messaging or whatsapp_business_management: generate a new one with both.",
   noAccount:
-    "That access token reaches no WhatsApp business account: assign yours to the system user, then generate a new token.",
+    "Meta does not say which WhatsApp business account that access token reaches: enter the account's id on the card (WhatsApp Manager, Account tools, or the asset_id in its address), then connect again.",
+  notTheAccount:
+    "That WhatsApp business account id is not one the access token reaches: check it in WhatsApp Manager, or assign the account to the system user and generate a new token.",
   notTheNumber:
     "That phone number id is not one of the WhatsApp business accounts the access token reaches.",
   whichNumber:
@@ -318,15 +326,30 @@ export async function install(
   if (!grant.valid) return { error: INSTALL_WORDS.tokenInvalid, ok: false };
   if (!TOKEN_SCOPES.every((scope) => grant.scopes.includes(scope)))
     return { error: INSTALL_WORDS.tokenPermissions, ok: false };
-  if (!grant.accounts.length)
+  // The accounts: as the grant names them; when it names none (a system user's
+  // grant over every account assigned to it), the one the card names, which
+  // listing its numbers with the token then proves the token reaches.
+  if (
+    request.waba_id &&
+    grant.accounts.length &&
+    !grant.accounts.includes(request.waba_id)
+  )
+    return { error: INSTALL_WORDS.notTheAccount, ok: false };
+  const accounts = request.waba_id ? [request.waba_id] : grant.accounts;
+  if (!accounts.length) {
+    logger.warn("install.no_account_named", { granted: grant.scopes.length });
     return { error: INSTALL_WORDS.noAccount, ok: false };
+  }
   // The number: as the card said it, else the only one the token reaches.
   const reached: Array<{ wabaId: string; number: BusinessNumber }> = [];
   try {
-    for (const account of grant.accounts.slice(0, TOKEN_ACCOUNTS))
+    for (const account of accounts.slice(0, TOKEN_ACCOUNTS))
       for (const number of await port.numbers(token, account))
         reached.push({ number, wabaId: account });
   } catch (error) {
+    if (request.waba_id && !grant.accounts.length)
+      // Meta refused the typed account to this token: said as such, and logged.
+      return metaRefused(logger, error, INSTALL_WORDS.notTheAccount);
     return metaRefused(logger, error);
   }
   const found = request.phone_number_id

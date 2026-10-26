@@ -453,6 +453,43 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
     expect(await kept.installations()).toEqual([]);
   });
 
+  it("takes the account the card names when the token's grant names none, and refuses one it does not reach", async () => {
+    const { address, kept, meta, post } = await setup();
+    const { key } = await address();
+    // A system user's grant over every account assigned to it names none.
+    meta.tokenGrant = { ...meta.tokenGrant, accounts: [] };
+    expect(await (await post(INSTALL_PATH, request(key))).json()).toEqual({
+      error: INSTALL_WORDS.noAccount,
+    });
+    // An account Meta refuses to this token is said as not reached.
+    meta.failNext("numbers", new MetaError(403, 200, undefined, "x"));
+    expect(
+      await (await post(INSTALL_PATH, request(key, { waba_id: WABA }))).json(),
+    ).toEqual({ error: INSTALL_WORDS.notTheAccount });
+    expect(await kept.installations()).toEqual([]);
+    // Named on the card, it is the one: listing its numbers proves the token reaches it.
+    const connected = (await (
+      await post(INSTALL_PATH, request(key, { waba_id: WABA }))
+    ).json()) as { connected?: boolean };
+    expect(connected.connected).toBe(true);
+    expect((await kept.installations()).map((one) => one.wabaId)).toEqual([
+      WABA,
+    ]);
+  });
+
+  it("refuses an account the card names outside the accounts the token's grant names", async () => {
+    const { address, kept, meta, post } = await setup();
+    const { key } = await address();
+    meta.tokenGrant = { ...meta.tokenGrant, accounts: [WABA] };
+    expect(
+      await (
+        await post(INSTALL_PATH, request(key, { waba_id: "8000000000000008" }))
+      ).json(),
+    ).toEqual({ error: INSTALL_WORDS.notTheAccount });
+    expect(meta.calls.some((one) => one.method === "numbers")).toBe(false);
+    expect(await kept.installations()).toEqual([]);
+  });
+
   it("finds the number across the token's accounts, or asks which", async () => {
     const { address, kept, meta, post } = await setup();
     const { key } = await address();
