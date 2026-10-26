@@ -5,7 +5,7 @@
   "components": [
     {
       "type": "BODY",
-      "text": "{{1}} has finished what you asked. Reply to see the answer.",
+      "text": "Your request to {{1}} is done. Reply to see the answer.",
       "example": {
         "body_text": [["Help Desk"]]
       }

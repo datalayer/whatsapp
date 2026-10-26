@@ -36,10 +36,12 @@ describe("the notice templates", () => {
       expect(template.category).toBe("UTILITY");
       const [body, buttons] = template.components;
       expect(body.text.match(/\{\{\d+\}\}/g)).toEqual(["{{1}}"]);
+      // Meta refuses a body that starts or ends with a variable (error 100, subcode 2388299).
+      expect(body.text.trim()).not.toMatch(/^\{\{\d+\}\}|\{\{\d+\}\}[.!?]?$/);
       expect(buttons.buttons).toHaveLength(1);
     }
     expect(TEMPLATES.delivery.components[0].text).toBe(
-      "{{1}} has finished what you asked. Reply to see the answer.",
+      "Your request to {{1}} is done. Reply to see the answer.",
     );
   });
 });

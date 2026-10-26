@@ -21,10 +21,12 @@ be raised, after the person went quiet.
 - The notice is one of three **utility** templates, created in the
   business's account at install, each with one quick-reply button and words
   that name the application only:
-  - `datalayer_turn_done`: _{{1}} has finished what you asked. Reply to see
-    the answer._ [Show me]
-  - `datalayer_approval_waiting`: _{{1}} is waiting for your decision on an
-    action. Reply to see it._ [Show me]
+  - `datalayer_turn_done`: _Your request to {{1}} is done. Reply to see the
+    answer._ [Show me]
+  - `datalayer_approval_waiting`: _An action by {{1}} is waiting for your
+    decision. Reply to see it._ [Show me]
+  - A body never starts or ends with its variable: Meta refuses it (error
+    100, subcode 2388299), as the first install on a real account showed.
   - `datalayer_link_reminder`: _You asked to link your Datalayer account
     with {{1}}. Reply to get a new link._ [Get a link]
 - Any reply reopens the window, and the held content is delivered then.

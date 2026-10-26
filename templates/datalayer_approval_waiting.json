@@ -5,7 +5,7 @@
   "components": [
     {
       "type": "BODY",
-      "text": "{{1}} is waiting for your decision on an action. Reply to see it.",
+      "text": "An action by {{1}} is waiting for your decision. Reply to see it.",
       "example": {
         "body_text": [["Help Desk"]]
       }

@@ -16,7 +16,8 @@
 #        and request from the card; migration 008 (1b5b911).
 # 0.1.6: help says where a person ends their links without the phone, Settings → WhatsApp (bc33413).
 # 0.1.7: the business account the card names (waba_id), when the token's grant names none (83d5e12).
-VERSION ?= 0.1.7
+# 0.1.8: notice templates whose body neither starts nor ends with its variable (Meta's 2388299).
+VERSION ?= 0.1.8
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 
