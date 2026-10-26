@@ -14,7 +14,8 @@
 #        (no app id, secret or verify token; a chart-generated verify secret) (3eafc54).
 # 0.1.5: groups (create, invite link, on/off, answer when named) and the Official Business Account status
 #        and request from the card; migration 008 (1b5b911).
-VERSION ?= 0.1.5
+# 0.1.6: help says where a person ends their links without the phone, Settings → WhatsApp (bc33413).
+VERSION ?= 0.1.6
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 
