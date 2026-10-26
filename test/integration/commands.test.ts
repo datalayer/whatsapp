@@ -102,6 +102,10 @@ describe.each(storeCases())("the words on $name", ({ store }) => {
       "You're talking to Help Desk, an application run by Datalayer SRL on Datalayer. To reach a person: support@example.com.",
     );
     for (const word of WORDS) expect(said).toContain(`\`${word}\``);
+    // Where a link ends without the phone (WA-50), on the web this service answers for.
+    expect(said).toContain(
+      SAY.lostPhone("https://datalayer.example/settings/whatsapp"),
+    );
   });
 
   it("help with no application on the number says so", async () => {

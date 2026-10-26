@@ -105,6 +105,8 @@ export const SAY = {
     "Your Datalayer account is unlinked from this number. `link` links it again. Your sign-ins at companies (Settings → Connections in Datalayer) are not changed: disconnect them there.",
   linkUnavailable:
     "Datalayer did not give a link just now. Nothing was changed; try again in a moment.",
+  lostPhone: (settings: string) =>
+    `Lost this phone? Whoever holds it asks as you: end your links without it in Datalayer, ${settings}`,
 } as const;
 
 /** The word a message is, or nothing: the whole message, any case and spacing. */
@@ -186,9 +188,11 @@ export async function runWord(
         await currentOf(context, dependencies, self),
       );
       const words = WORDS.map((one) => `• \`${one}\`: ${HELP[one]}`);
+      // Whoever holds this phone asks as the person: where links end without it (WA-50).
+      const settings = `${dependencies.webUrl.replace(/\/+$/, "")}/settings/whatsapp`;
       return [
         text(
-          `${disclosure(application, context.business, context.support)}\n\nWrite one of these words alone in a message:\n${words.join("\n")}`,
+          `${disclosure(application, context.business, context.support)}\n\nWrite one of these words alone in a message:\n${words.join("\n")}\n\n${SAY.lostPhone(settings)}`,
         ),
       ];
     }
