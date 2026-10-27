@@ -674,5 +674,12 @@ async function receive(
     ignored: normalized.ignored,
     statuses: normalized.statuses.length,
   });
+  // A message Meta did not deliver says why, by Meta's code only: never the
+  // message id, which may embed a phone number, nor whom it was for.
+  for (const update of normalized.statuses)
+    if (update.status === "failed")
+      dependencies.logger.warn("message.failed", {
+        meta_error: update.errorCode ?? null,
+      });
   send(200);
 }

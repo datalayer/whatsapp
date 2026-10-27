@@ -252,7 +252,7 @@ describe("the webhook on a real socket", () => {
 
   it("keeps each sent message's furthest status, out of order and repeated", async () => {
     const store = new MemoryStore();
-    const { post } = await endpoint(new RecordingQueue(), store);
+    const { lines, post } = await endpoint(new RecordingQueue(), store);
     const status = (status: string, timestamp: string, extra = {}) =>
       webhook({
         statuses: [
@@ -288,6 +288,14 @@ describe("the webhook on a real socket", () => {
     expect(JSON.stringify(await store.status("wamid.S1"))).not.toContain(
       ALICE_PHONE,
     );
+    // A failure is said in the logs by Meta's code, and by nothing that names anybody.
+    const failed = lines.filter((line) => line.includes('"message.failed"'));
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toContain('"meta_error":131056');
+    for (const line of failed) {
+      expect(line).not.toContain(ALICE_PHONE);
+      expect(line).not.toContain("wamid.S1");
+    }
   });
 
   it("hands account events to the worker once, without phone numbers, and sets calls aside", async () => {
