@@ -281,11 +281,14 @@ export const INTERACTIVE: ReadonlySet<Outgoing["type"]> = new Set([
 ]);
 
 /**
- * Where a message names its person. Since Meta's business-scoped user ids,
- * a message is addressed by the BSUID; the field is re-read in Meta's
- * reference before the first send.
+ * Where a message names whom it is for. A person is named by their BSUID in
+ * `recipient`; `to` is a phone number's field, and a BSUID put there is read
+ * as a number nobody has (error 131026, *undeliverable*: met on the first
+ * send to a real phone, 27 October 2026). A group is named by its id in `to`,
+ * with `recipient_type` `group` (Meta's Groups API).
  */
-export const RECIPIENT_FIELD = "to";
+export const RECIPIENT_FIELD = "recipient";
+export const GROUP_FIELD = "to";
 
 /** The body Meta's `/messages` takes for one message. */
 export function messageBody(
@@ -296,7 +299,7 @@ export function messageBody(
   const base = {
     messaging_product: "whatsapp",
     recipient_type: recipientType,
-    [RECIPIENT_FIELD]: userId,
+    [recipientType === "group" ? GROUP_FIELD : RECIPIENT_FIELD]: userId,
   };
   switch (message.type) {
     case "text":

@@ -18,7 +18,8 @@
 # 0.1.7: the business account the card names (waba_id), when the token's grant names none (83d5e12).
 # 0.1.8: notice templates whose body neither starts nor ends with its variable (Meta's 2388299).
 # 0.1.9: a message Meta did not deliver logged with Meta's code (message.failed).
-VERSION ?= 0.1.9
+# 0.1.10: a person addressed by their BSUID in `recipient`, not `to` (Meta's 131026 undeliverable).
+VERSION ?= 0.1.10
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 

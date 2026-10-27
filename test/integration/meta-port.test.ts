@@ -110,9 +110,12 @@ describe("the Graph API port", () => {
     ]);
     expect(JSON.parse(seen[0]!.body)).toMatchObject({
       messaging_product: "whatsapp",
-      to: ALICE,
+      recipient: ALICE,
       type: "text",
     });
+    // A person's BSUID is never in `to`, the phone number's field: Meta reads
+    // it as a number nobody has and answers 131026, undeliverable.
+    expect(JSON.parse(seen[0]!.body)).not.toHaveProperty("to");
   });
 
   it("waits and tries again on the pair rate limit, counted, then gives up", async () => {
