@@ -21,7 +21,9 @@
 # 0.1.10: a person addressed by their BSUID in `recipient`, not `to` (Meta's 131026 undeliverable).
 # 0.1.11: the bind asserts the provider — always `custom`, with the Meta app's id (agent-runtimes 1.5.88;
 #         ai-agents 0.0.94 refuses a bind without it).
-VERSION ?= 0.1.11
+# 0.1.12: a company's sign-in shown in the chat, the turn going on (WA-42, e928f87); voice notes heard
+#         as the person by Datalayer's speech service, quoted back and asked (WA-18, 95eda03; needs speech:0.0.16).
+VERSION ?= 0.1.12
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 
