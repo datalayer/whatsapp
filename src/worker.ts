@@ -56,6 +56,7 @@ import {
   WORDS,
 } from "./render.js";
 import { holdRef, PART_SPACING_MS, refOf, Speaker } from "./speaker.js";
+import { isRecording, MAX_VOICE_BYTES, SPEECH_WORDS } from "./speech.js";
 import {
   installationData,
   wamidHash,
@@ -439,7 +440,10 @@ export class Worker {
       job.media?.caption ??
       ""
     ).trim();
-    if (!prompt) return say([text(WORDS.textOnly)]);
+    // A voice note is heard once the application is known (WA-18).
+    const voice =
+      !prompt && isRecording(job.media, job.type) ? job.media : undefined;
+    if (!prompt && !voice) return say([text(WORDS.textOnly)]);
     // An option of a question asked in a group: answered in the group.
     const pressed = optionOf(job.reply?.id, kept?.asking?.options);
     if (pressed !== undefined && kept?.asking?.groupId) {
@@ -460,7 +464,66 @@ export class Worker {
       chat,
       link.principalUid ?? "",
       prompt,
+      voice?.id,
     );
+  }
+
+  /**
+   * A voice note heard as the person (WA-18): downloaded from Meta at once,
+   * heard by Datalayer's speech service with the person's host token, the
+   * audio dropped; the words quoted back and returned as the prompt.
+   * `undefined` once the person was told it could not be heard.
+   */
+  async #hear(
+    installation: Installation,
+    person: Person,
+    mediaId: string,
+  ): Promise<string | undefined> {
+    const { logger, metrics } = this.deps;
+    const say = (said: string) =>
+      this.speaker.say(installation, person.userId, [text(said)]);
+    let recording;
+    try {
+      recording = await this.deps.port.download(
+        this.speaker.token(installation),
+        mediaId,
+        MAX_VOICE_BYTES,
+      );
+    } catch (error) {
+      if (error instanceof MetaError && error.tokenRefused) throw error;
+      logger.warn("voice.not_downloaded", {
+        status: error instanceof MetaError ? error.status : 0,
+      });
+      await say(SPEECH_WORDS.notHeard);
+      return undefined;
+    }
+    let words: string;
+    try {
+      words = await this.deps.asPerson.hear(person, recording);
+    } catch (error) {
+      if (error instanceof HostRefusedError) {
+        // The speech service's own sentence: a recording too long, a limit spent.
+        logger.warn("voice.refused", { status: error.status });
+        await say(
+          error.detail && !secretBearing(error.detail)
+            ? error.detail
+            : SPEECH_WORDS.notHeard,
+        );
+      } else {
+        logger.error("voice.failed", { error });
+        await say(SPEECH_WORDS.notHeard);
+      }
+      return undefined;
+    } finally {
+      recording = undefined;
+    }
+    if (!words) {
+      await say(SPEECH_WORDS.nothingHeard);
+      return undefined;
+    }
+    metrics.count("voice_notes");
+    await say(SPEECH_WORDS.heard(words));
+    return words;
   }
 
   /** What the window held, said now: approvals' cards, answers not shown yet. */
@@ -526,6 +589,7 @@ export class Worker {
     chat: ChatKey & Readonly<{ wabaId: string }>,
     principalUid: string,
     prompt: string,
+    voiceMediaId?: string,
   ): Promise<void> {
     const { store, clock } = this.deps;
     const say = (messages: readonly Outgoing[]) =>
@@ -586,12 +650,24 @@ export class Worker {
       );
       if (refused) return await say([text(refused)]);
       await this.speaker.markRead(installation, job.wamid);
+      const asked = voiceMediaId
+        ? await this.#hear(
+            installation,
+            {
+              deploymentUid: resolution.applicationId,
+              hostKey,
+              userId: job.userId,
+            },
+            voiceMediaId,
+          )
+        : prompt;
+      if (asked === undefined) return;
       await this.#turn(job, installation, hostKey, chat, kept, {
         appName,
         applicationId: resolution.applicationId,
         owner,
         principalUid,
-        prompt,
+        prompt: asked,
       });
     } finally {
       await store.releaseTurn(chat, owner);

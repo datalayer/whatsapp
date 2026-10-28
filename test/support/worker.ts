@@ -183,6 +183,23 @@ export class FakeMeta implements MetaPort {
     this.#record({ detail: wamid, method: "markRead", phoneNumberId, token });
   }
 
+  /** Media Meta holds, by id: a voice note's bytes and type. */
+  readonly media = new Map<string, { bytes: Uint8Array; mimeType: string }>();
+
+  async download(
+    token: string,
+    mediaId: string,
+    maxBytes: number,
+  ): Promise<Readonly<{ bytes: Uint8Array; mimeType: string }>> {
+    this.#record({ detail: { mediaId }, method: "download", token });
+    const held = this.media.get(mediaId);
+    if (!held)
+      throw new MetaError(404, 100, undefined, "The media was not found");
+    if (held.bytes.byteLength > maxBytes)
+      throw new MetaError(413, undefined, undefined, "The media is too large");
+    return held;
+  }
+
   async upload(
     token: string,
     phoneNumberId: string,
@@ -453,6 +470,28 @@ export class FakeAsPerson implements AsPerson {
   readonly answers = new Map<string, string>();
   readonly handoffs: Array<{ kind: string; target: string; userId: string }> =
     [];
+  /** What the speech service hears, or how it refuses; each recording heard. */
+  heard: string | Error = "What changed this week?";
+  readonly recordings: Array<{
+    deploymentUid: string;
+    mimeType: string;
+    size: number;
+    userId: string;
+  }> = [];
+
+  async hear(
+    person: Person,
+    recording: Readonly<{ bytes: Uint8Array; mimeType: string }>,
+  ): Promise<string> {
+    this.recordings.push({
+      deploymentUid: person.deploymentUid,
+      mimeType: recording.mimeType,
+      size: recording.bytes.byteLength,
+      userId: person.userId,
+    });
+    if (this.heard instanceof Error) throw this.heard;
+    return this.heard;
+  }
 
   #of(person: Person, approvalId: string) {
     const kept = this.approvals.get(approvalId);

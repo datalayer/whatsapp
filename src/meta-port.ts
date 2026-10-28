@@ -208,6 +208,15 @@ export interface MetaPort {
   ): Promise<string>;
   /** Mark the person's message read, with the typing indicator (25 seconds at most). */
   markRead(token: string, phoneNumberId: string, wamid: string): Promise<void>;
+  /**
+   * A media message's file, downloaded at once (Meta's download address
+   * lives five minutes), refused past `maxBytes`: a voice note heard (WA-18).
+   */
+  download(
+    token: string,
+    mediaId: string,
+    maxBytes: number,
+  ): Promise<Readonly<{ bytes: Uint8Array; mimeType: string }>>;
   /** Upload a file the number then sends: its media id. */
   upload(
     token: string,
@@ -568,6 +577,43 @@ export class HttpMetaPort implements MetaPort {
       },
       z.unknown(),
     );
+  }
+
+  async download(
+    token: string,
+    mediaId: string,
+    maxBytes: number,
+  ): Promise<Readonly<{ bytes: Uint8Array; mimeType: string }>> {
+    const media = await this.#call(
+      "The media was not found",
+      `/${encodeURIComponent(mediaId)}`,
+      { token },
+      z
+        .object({
+          url: z.string().url(),
+          mime_type: z.string().min(1),
+          file_size: z.coerce.number().optional(),
+        })
+        .loose(),
+    );
+    if ((media.file_size ?? 0) > maxBytes)
+      throw new MetaError(413, undefined, undefined, "The media is too large");
+    if (!media.url.startsWith("https://"))
+      throw new MetaError(502, undefined, undefined, "The media's address");
+    const response = await this.#fetch(media.url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok)
+      throw new MetaError(
+        response.status,
+        undefined,
+        undefined,
+        "The media was not downloaded",
+      );
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes)
+      throw new MetaError(413, undefined, undefined, "The media is too large");
+    return { bytes, mimeType: media.mime_type };
   }
 
   async upload(

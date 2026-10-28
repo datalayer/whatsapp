@@ -129,6 +129,7 @@ export const METRICS = [
   "notices",
   "holds",
   "pair_rate_limited",
+  "voice_notes",
   "window",
 ] as const;
 export type MetricName = (typeof METRICS)[number];

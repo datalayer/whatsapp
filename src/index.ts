@@ -67,7 +67,7 @@ const agent = new HttpAgentClient<WhatsAppTurn>(
   fetch,
   hostKeyFor,
 );
-const asPerson = httpAsPerson(credentials, hosts);
+const asPerson = httpAsPerson(credentials, hosts, config.DATALAYER_API_URL);
 // Each delivery queued once by its uid; handled from the queue.
 const enqueueDelivery = async (job: {
   delivery: Extract<Job, { kind: "delivery" }>["delivery"];

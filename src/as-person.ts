@@ -6,11 +6,13 @@ import {
   type HostKeyCredentials,
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
 
+import { transcribe, type Recording } from "./speech.js";
+
 /**
  * Datalayer as one person of a chat: the installation's host key exchanged
  * for that person's fifteen-minute host token on one deployment, then an
- * approval read or decided, a session's last answer read, or a one-use
- * *Open in Datalayer* code made, as them. A person who is not linked, or not
+ * approval read or decided, a session's last answer read, a one-use
+ * *Open in Datalayer* code made, or a voice note heard, as them. A person who is not linked, or not
  * the one an approval waits on, is refused by Datalayer, never decided for
  * by the service. Tests give the worker a fake.
  */
@@ -45,12 +47,15 @@ export interface AsPerson {
     kind: "session" | "approval",
     target: string,
   ): Promise<string>;
+  /** A voice note heard as the person by Datalayer's speech service (WA-18): its words. */
+  hear(person: Person, recording: Recording): Promise<string>;
 }
 
 /** `AsPerson` over ai-agents' host routes and the session API. */
 export function httpAsPerson<P>(
   credentials: Pick<HostKeyCredentials<P>, "exchangeFor">,
   hosts: Pick<DatalayerHostClient, "presentation" | "decide" | "handoff">,
+  apiUrl: string,
   fetchImplementation: typeof fetch = fetch,
 ): AsPerson {
   const tokenOf = async (person: Person) =>
@@ -62,6 +67,13 @@ export function httpAsPerson<P>(
   return {
     decide: async (person, approvalId, decision) =>
       hosts.decide((await tokenOf(person)).access_token, approvalId, decision),
+    hear: async (person, recording) =>
+      transcribe(
+        fetchImplementation,
+        apiUrl,
+        (await tokenOf(person)).access_token,
+        recording,
+      ),
     handoff: async (person, kind, target) =>
       (await hosts.handoff((await tokenOf(person)).access_token, kind, target))
         .path,
