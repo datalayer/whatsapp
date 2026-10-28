@@ -31,6 +31,10 @@ import type { Installation, WhatsAppStore } from "./store.js";
  * not the presser's answers so; a late press on an old card answers
  * *Already decided*. There is no edit: each outcome is a new message. Only
  * a linked person's own approvals reach their chat; a visitor never decides.
+ * What may be decided here is what Datalayer's presentation and the kit's
+ * renderers allow: mail, and since 28 October 2026 a company's `pap_confirm`
+ * on its exact revision (WA-43) — a press on a revision the company has
+ * since changed decides nothing and the new revision's card is sent.
  */
 
 export type ApprovalDependencies = Readonly<{
