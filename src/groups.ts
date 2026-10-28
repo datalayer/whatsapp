@@ -4,12 +4,19 @@ import {
   TurnState,
   type AskQuestion,
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
+import type { PapSignInWaiting } from "@datalayer/agent-runtimes/lib/portable/signIn";
 import { createHash } from "node:crypto";
 
 import type { Person } from "./as-person.js";
 import type { WhatsAppTurnRequest } from "./domain.js";
 import type { Outgoing } from "./meta-port.js";
-import { renderQuestion, secretBearing, shownText, WORDS } from "./render.js";
+import {
+  renderQuestion,
+  renderSignIn,
+  secretBearing,
+  shownText,
+  WORDS,
+} from "./render.js";
 import { forGroup, PART_SPACING_MS } from "./speaker.js";
 import {
   wamidHash,
@@ -21,7 +28,7 @@ import type { GroupJob, MessageJob } from "./webhook.js";
 import type { Worker } from "./worker.js";
 
 /**
- * Groups (plans/WHATSAPP.md §3.9, WA-22): the conversations of a group the
+ * Groups (WA-22): the conversations of a group the
  * number created from the application's Ship card. Meta's Groups API is
  * open to a number with Official Business Account status only; a group is
  * invite-only (its invite link), at most 8 people, and takes text, media and
@@ -57,6 +64,8 @@ export const GROUP_WORDS = {
     `${who}the rest needs your own chat with ${business}: write to it there, then ask again.`,
   approval: (who: string, business: string) =>
     `${who}an approval waits for you in your own chat with ${business}.`,
+  signIn: (who: string, business: string) =>
+    `${who}a sign-in waits for you in your own chat with ${business}.`,
   refused:
     "Datalayer did not let this group use the application. Ask the business.",
 } as const;
@@ -302,9 +311,22 @@ export class GroupConversations {
       const state = new TurnState();
       let secret = false;
       let lastRenew = clock.now();
+      const signIns = new Set<string>();
       for await (const event of stream.updates) {
         state.apply(event);
         if (!secret && secretBearing(shownText(state))) secret = true;
+        // A company's sign-in (WA-42) is the asker's alone: never in the group.
+        if (event.kind === "sign-in" && !signIns.has(event.toolCallId)) {
+          signIns.add(event.toolCallId);
+          logger.info("group.sign_in", { mode: event.signIn.mode });
+          await this.signIn(
+            installation,
+            job.groupId,
+            job.userId,
+            job.profileName,
+            event.signIn,
+          );
+        }
         if (state.ended) break;
         if (clock.now() - lastRenew >= 60 * 1000) {
           lastRenew = clock.now();
@@ -351,6 +373,40 @@ export class GroupConversations {
     } finally {
       await store.releaseTurn(chat, owner);
     }
+  }
+
+  /**
+   * A sign-in asked in a group's turn: its button or code in the asker's own
+   * chat while its window is open, with a pointer in the group; else the
+   * group is told to write to the number first. Its link is never posted in
+   * the group.
+   */
+  async signIn(
+    installation: Installation,
+    groupId: string,
+    userId: string,
+    profileName: string | undefined,
+    waiting: PapSignInWaiting,
+  ): Promise<void> {
+    const speaker = this.worker.speaker;
+    const own: ChatKey = { phoneNumberId: installation.phoneNumberId, userId };
+    const who = whoOf(profileName);
+    if (!(await this.deps.window.open(own))) {
+      await speaker.sayInGroup(installation, groupId, [
+        {
+          text: GROUP_WORDS.writeFirst(who, installation.businessName),
+          type: "text",
+        },
+      ]);
+      return;
+    }
+    await speaker.say(installation, userId, renderSignIn(waiting));
+    await speaker.sayInGroup(installation, groupId, [
+      {
+        text: GROUP_WORDS.signIn(who, installation.businessName),
+        type: "text",
+      },
+    ]);
   }
 
   /**

@@ -49,6 +49,7 @@ import {
   approvalPressOf,
   optionOf,
   progressMessage,
+  renderSignIn,
   secretBearing,
   shownText,
   STOP_ID,
@@ -720,9 +721,17 @@ export class Worker {
     let reacted = false;
     let lastProgress: number | undefined;
     let lastRenew = started;
+    const signIns = new Set<string>();
     for await (const event of stream.updates) {
       state.apply(event);
       if (!secret && secretBearing(shownText(state))) secret = true;
+      // A company's sign-in (WA-42): its button or code at once, once per
+      // call; the turn goes on, and the next answer knows the account.
+      if (event.kind === "sign-in" && !signIns.has(event.toolCallId)) {
+        signIns.add(event.toolCallId);
+        logger.info("turn.sign_in", { mode: event.signIn.mode });
+        await say(renderSignIn(event.signIn));
+      }
       if (state.ended) break;
       const now = clock.now();
       if (now - lastRenew >= TURN_RENEW_MS) {

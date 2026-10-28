@@ -10,6 +10,7 @@ import {
 import {
   PAP_SIGN_IN_WORDS,
   readPapSignIn,
+  type PapSignInWaiting,
 } from "@datalayer/agent-runtimes/lib/portable/signIn";
 
 import { LIMITS, type Outgoing } from "./meta-port.js";
@@ -590,6 +591,17 @@ export function renderPapSignIn(result: unknown): Outgoing[] | undefined {
   const waiting = readPapSignIn(result);
   if (!waiting) return undefined;
   if ("refused" in waiting)
+    return [{ text: PAP_SIGN_IN_WORDS.refused, type: "text" }];
+  return renderSignIn(waiting);
+}
+
+/**
+ * A sign-in the runtime's `sign-in` semantic event carries, read already by
+ * `readPapSignIn` (WA-42): shown as {@link renderPapSignIn} shows it. A page
+ * that is not https is refused here too, never shown.
+ */
+export function renderSignIn(waiting: PapSignInWaiting): Outgoing[] {
+  if (!/^https:\/\//.test(waiting.open))
     return [{ text: PAP_SIGN_IN_WORDS.refused, type: "text" }];
   const name = waiting.organization
     ? `${waiting.organization.name} (${waiting.organization.domain})`
