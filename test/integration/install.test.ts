@@ -208,8 +208,10 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
     expect(hosts.binds).toEqual([
       {
         code: "dlhb_bind-code-1",
+        customAppId: APP_ID,
         externalId: `${WABA}:${PHONE_NUMBER_ID}`,
         name: "Acme SRL",
+        provider: "custom",
       },
     ]);
     expect(hosts.webhooks).toEqual([

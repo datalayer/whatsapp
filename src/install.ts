@@ -442,7 +442,15 @@ async function connect(
   const externalId = externalIdOf(wabaId, phoneNumberId);
   let bound;
   try {
-    bound = await hosts.bind({ code: connection.bindCode, externalId, name });
+    // A WhatsApp installation is always the person's own Meta app: bound as
+    // `custom` with that app's id, the one it was registered with.
+    bound = await hosts.bind({
+      code: connection.bindCode,
+      customAppId: app.appId,
+      externalId,
+      name,
+      provider: "custom",
+    });
   } catch (error) {
     if (!(error instanceof HostRefusedError)) throw error;
     logger.warn("install.bind_refused", { status: error.status });

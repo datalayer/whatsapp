@@ -1,6 +1,7 @@
 import {
   HostRefusedError,
   type BoundHost,
+  type HostProvider,
   type DatalayerHostClient,
   type HostDelivery,
   type HostSelf,
@@ -35,8 +36,13 @@ export class FakeHosts
   readonly refusedKeys = new Set<string>();
   /** Bind codes that were spent or expired. */
   readonly spentCodes = new Set<string>();
-  readonly binds: Array<{ code: string; externalId: string; name?: string }> =
-    [];
+  readonly binds: Array<{
+    code: string;
+    externalId: string;
+    name?: string;
+    provider: string;
+    customAppId?: string;
+  }> = [];
   readonly webhooks: string[] = [];
   /** What each key's outbox holds. */
   readonly outboxes = new Map<string, HostDelivery[]>();
@@ -113,6 +119,8 @@ export class FakeHosts
     code: string;
     externalId: string;
     name?: string;
+    provider: HostProvider;
+    customAppId?: string;
   }): Promise<BoundHost> {
     this.binds.push(input);
     if (this.spentCodes.has(input.code))

@@ -19,7 +19,9 @@
 # 0.1.8: notice templates whose body neither starts nor ends with its variable (Meta's 2388299).
 # 0.1.9: a message Meta did not deliver logged with Meta's code (message.failed).
 # 0.1.10: a person addressed by their BSUID in `recipient`, not `to` (Meta's 131026 undeliverable).
-VERSION ?= 0.1.10
+# 0.1.11: the bind asserts the provider — always `custom`, with the Meta app's id (agent-runtimes 1.5.88;
+#         ai-agents 0.0.94 refuses a bind without it).
+VERSION ?= 0.1.11
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 
