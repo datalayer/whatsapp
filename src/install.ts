@@ -2,7 +2,6 @@ import {
   DELIVERY_PATH,
   HostRefusedError,
   type DatalayerHostClient,
-  type EncryptedSecret,
   type Logger,
   type SecretCipher,
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
@@ -10,6 +9,7 @@ import { randomInt } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 
+import { keptDelivery } from "./deliveries.js";
 import { externalIdOf } from "./domain.js";
 import {
   META_CODES,
@@ -472,15 +472,16 @@ async function connect(
   const self = await hosts.self(bound.hostKey);
   // Where Datalayer pushes this number's deliveries; refused or unreachable,
   // the worker reads the outbox instead.
-  let deliverySecret: EncryptedSecret | undefined;
+  let delivery: ReturnType<typeof keptDelivery> | undefined;
   try {
-    const { signingSecret } = await hosts.setWebhook(
+    const hook = await hosts.setWebhook(
       bound.hostKey,
       `${dependencies.appUrl.replace(/\/+$/, "")}${DELIVERY_PATH}/${encodeURIComponent(bound.hostUid)}`,
     );
-    deliverySecret = cipher.encrypt(
-      signingSecret,
-      installationData("delivery", wabaId, phoneNumberId),
+    delivery = keptDelivery(
+      cipher,
+      { phoneNumberId, wabaId },
+      { key: hook.key, secret: hook.signingSecret, version: hook.version },
     );
   } catch (error) {
     logger.warn("install.delivery_not_registered", { error });
@@ -523,7 +524,7 @@ async function connect(
     state: "active",
     support: connection.support,
     wabaId,
-    ...(deliverySecret ? { deliverySecret } : {}),
+    ...delivery,
     app: {
       appId: app.appId,
       appSecret: cipher.encrypt(

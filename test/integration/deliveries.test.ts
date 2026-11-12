@@ -1,13 +1,20 @@
 import {
+  DELIVERY_KEY_HEADER,
   DELIVERY_ROUTE,
   DeliveryPoller,
+  DeliveryRenewal,
   deliveryRoute,
   deliverySignature,
+  SHARED_SECRET_DELIVERIES_UNTIL,
   type HostDelivery,
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { deliverySinkOf, type DeliveryQueueJob } from "../../src/deliveries.js";
+import {
+  deliverySecretKeeper,
+  deliverySinkOf,
+  type DeliveryQueueJob,
+} from "../../src/deliveries.js";
 import { installationData } from "../../src/store.js";
 import { ALICE, PHONE_NUMBER_ID, serve, WABA } from "../support/meta.js";
 import { storeCases } from "../support/stores.js";
@@ -110,6 +117,104 @@ describe.each(storeCases())("deliveries on $name", ({ store }) => {
     expect(queued).toEqual([
       { delivery: requested("ap-1"), hostUid: `host-${PHONE_NUMBER_ID}` },
     ]);
+  });
+
+  it("takes a push under Datalayer's own key only when it names the key kept, and a shared-secret one only until 31 December 2026", async () => {
+    const h = harness(store());
+    await ready(h);
+    const host = `host-${PHONE_NUMBER_ID}`;
+    const queued: unknown[] = [];
+    const body = JSON.stringify(requested("ap-1"));
+    const push = async (at: number, key?: string) => {
+      const served = await serve({
+        [`POST ${DELIVERY_ROUTE}`]: deliveryRoute(
+          deliverySinkOf(h.store, h.cipher),
+          async (one) => void queued.push(one),
+          () => at,
+        ),
+      });
+      try {
+        const answered = await fetch(
+          `${served.url}/datalayer/deliveries/${host}`,
+          {
+            body,
+            headers: {
+              "content-type": "application/json",
+              "x-datalayer-signature": deliverySignature(SECRET, at, body),
+              "x-datalayer-timestamp": String(at),
+              ...(key ? { [DELIVERY_KEY_HEADER]: key } : {}),
+            },
+            method: "POST",
+          },
+        );
+        return answered.status;
+      } finally {
+        await served.close();
+      }
+    };
+    const before = SHARED_SECRET_DELIVERIES_UNTIL - 60;
+    const after = SHARED_SECRET_DELIVERIES_UNTIL + 60;
+    // Kept before the switch, without a key: until the window ends, then never.
+    expect(await push(before)).toBe(200);
+    expect(await push(after)).toBe(401);
+    // Registered again: the push names the key kept, whatever the date.
+    await deliverySecretKeeper(h.store, h.cipher)(host, {
+      key: "ai-agents-host-deliveries-v1",
+      secret: SECRET,
+      version: 2,
+    });
+    expect(await push(after, "ai-agents-host-deliveries-v1")).toBe(200);
+    expect(await push(after)).toBe(401);
+    expect(await push(after, "ai-agents-host-deliveries-v2")).toBe(401);
+    expect(queued).toHaveLength(2);
+  });
+
+  it("registers a webhook again when Datalayer asks, at the address it holds, and keeps the new secret, key and version encrypted where the old ones were", async () => {
+    const h = harness(store());
+    await ready(h);
+    const host = `host-${PHONE_NUMBER_ID}`;
+    const url = `https://whatsapp.example/datalayer/deliveries/${host}`;
+    h.hosts.webhookKey = "ai-agents-host-deliveries-v1";
+    h.hosts.self_ = {
+      ...h.hosts.self_,
+      delivery: { renew: true, url, version: 1 },
+    };
+    const renewal = new DeliveryRenewal(
+      deliverySinkOf(h.store, h.cipher),
+      h.hosts,
+      deliverySecretKeeper(h.store, h.cipher),
+      { warn: () => undefined },
+    );
+    expect(await renewal.renewOnce()).toBe(1);
+    expect(h.hosts.webhooks.at(-1)).toBe(url);
+    const version = h.hosts.webhooks.length;
+    const kept = await h.store.installationByHost(host);
+    expect(kept?.deliveryKey).toBe("ai-agents-host-deliveries-v1");
+    expect(kept?.deliveryVersion).toBe(version);
+    expect(JSON.stringify(kept?.deliverySecret)).not.toContain(SECRET);
+    await expect(
+      deliverySinkOf(h.store, h.cipher).deliverySecretOf(host),
+    ).resolves.toEqual({
+      key: "ai-agents-host-deliveries-v1",
+      secret: SECRET,
+      version,
+    });
+    // Datalayer has it now: nothing more to do.
+    h.hosts.self_ = {
+      ...h.hosts.self_,
+      delivery: {
+        key: "ai-agents-host-deliveries-v1",
+        renew: false,
+        url,
+        version,
+      },
+    };
+    expect(await renewal.renewOnce()).toBe(0);
+    // Removed, the number keeps nothing of it.
+    await h.store.removeInstallation(WABA, PHONE_NUMBER_ID, new Date());
+    const removed = await h.store.installation(WABA, PHONE_NUMBER_ID);
+    expect(removed?.deliveryKey).toBeUndefined();
+    expect(removed?.deliveryVersion).toBeUndefined();
   });
 
   it("shows an approval inside the window as one card, acknowledged, once", async () => {

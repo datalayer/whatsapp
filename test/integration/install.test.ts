@@ -243,6 +243,9 @@ describe.each(storeCases())("the install on $name", ({ store, database }) => {
     expect(open("delivery", installation?.deliverySecret)).toBe(
       "dlws_test-only-signing-secret",
     );
+    // Registered before Datalayer signs with its own key: no key kept.
+    expect(installation?.deliveryKey).toBeUndefined();
+    expect(installation?.deliveryVersion).toBe(1);
     expect(
       cipher.decrypt(
         installation!.app.appSecret!,
