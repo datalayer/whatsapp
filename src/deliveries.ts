@@ -2,6 +2,7 @@ import {
   receiveDelivery,
   type DatalayerHostClient,
   type DeliveryJob,
+  type DeliverySecret,
   type DeliverySink,
   type HostDelivery,
   type Logger,
@@ -38,6 +39,49 @@ import type { WindowKeeper } from "./window.js";
 /** The queue's job for one delivery of one installation. */
 export type DeliveryQueueJob = DeliveryJob & Readonly<{ kind: "delivery" }>;
 
+/**
+ * What an installation keeps of a webhook registration: the secret
+ * encrypted (bound to the installation's `delivery`), with the key it was
+ * derived under and the registration's version.
+ */
+export function keptDelivery(
+  cipher: Pick<SecretCipher, "encrypt">,
+  installation: Pick<Installation, "phoneNumberId" | "wabaId">,
+  kept: DeliverySecret,
+): Pick<Installation, "deliveryKey" | "deliverySecret" | "deliveryVersion"> {
+  return {
+    deliveryKey: kept.key,
+    deliverySecret: cipher.encrypt(
+      kept.secret,
+      installationData(
+        "delivery",
+        installation.wabaId,
+        installation.phoneNumberId,
+      ),
+    ),
+    deliveryVersion: kept.version,
+  };
+}
+
+/**
+ * Keep the secret of a webhook registered again (`DeliveryRenewal`) where
+ * the old one was: the installation bound to `hostUid`, its key and version
+ * replaced with it.
+ */
+export function deliverySecretKeeper(
+  store: Pick<WhatsAppStore, "installationByHost" | "saveInstallation">,
+  cipher: Pick<SecretCipher, "encrypt">,
+): (hostUid: string, kept: DeliverySecret) => Promise<void> {
+  return async (hostUid, kept) => {
+    const installation = await store.installationByHost(hostUid);
+    if (!installation || installation.state === "removed") return;
+    await store.saveInstallation({
+      ...installation,
+      ...keptDelivery(cipher, installation, kept),
+    });
+  };
+}
+
 /** The store, as the kit's deliveries read it: a removed installation has no key. */
 export function deliverySinkOf(
   store: WhatsAppStore,
@@ -60,14 +104,18 @@ export function deliverySinkOf(
     deliverySecretOf: async (hostUid) => {
       const installation = await store.installationByHost(hostUid);
       return installation?.deliverySecret && installation.state !== "removed"
-        ? cipher.decrypt(
-            installation.deliverySecret,
-            installationData(
-              "delivery",
-              installation.wabaId,
-              installation.phoneNumberId,
+        ? {
+            key: installation.deliveryKey,
+            secret: cipher.decrypt(
+              installation.deliverySecret,
+              installationData(
+                "delivery",
+                installation.wabaId,
+                installation.phoneNumberId,
+              ),
             ),
-          )
+            version: installation.deliveryVersion,
+          }
         : undefined;
     },
     hostKeyOf: async (hostUid) => {

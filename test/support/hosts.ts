@@ -138,12 +138,19 @@ export class FakeHosts
     };
   }
 
+  /** The key Datalayer names on a registration (none: the shared secret, as before the switch). */
+  webhookKey?: string;
+
   async setWebhook(
     hostKey: string,
     url: string,
-  ): Promise<{ signingSecret: string; version: number }> {
+  ): Promise<{ key?: string; signingSecret: string; version: number }> {
     this.#key(hostKey);
     this.webhooks.push(url);
-    return { signingSecret: "dlws_test-only-signing-secret", version: 1 };
+    return {
+      signingSecret: "dlws_test-only-signing-secret",
+      version: this.webhooks.length,
+      ...(this.webhookKey ? { key: this.webhookKey } : {}),
+    };
   }
 }

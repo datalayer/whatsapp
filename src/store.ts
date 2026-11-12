@@ -129,6 +129,14 @@ export type Installation = Readonly<{
   businessToken?: EncryptedSecret;
   pin?: EncryptedSecret;
   deliverySecret?: EncryptedSecret;
+  /**
+   * The key Datalayer derived that secret under
+   * (`ai-agents-host-deliveries-v<N>`), named by every push; none: the
+   * platform's shared secret, accepted until 31 December 2026 only.
+   */
+  deliveryKey?: string;
+  /** The registration's version the secret belongs to. */
+  deliveryVersion?: number;
   /** The account the installation belongs to at Datalayer (its quota's organization). */
   organizationUid: string;
   /** The business's name as Meta verified it: what the disclosure line says. */
@@ -622,7 +630,14 @@ export class MemoryStore implements WhatsAppStore {
   async saveInstallation(installation: Installation): Promise<void> {
     this.#installations.set(
       JSON.stringify([installation.wabaId, installation.phoneNumberId]),
-      { ...installation, installedAt: installation.installedAt ?? new Date() },
+      {
+        ...installation,
+        // The key and version describe the secret: never kept without it.
+        ...(installation.deliverySecret
+          ? {}
+          : { deliveryKey: undefined, deliveryVersion: undefined }),
+        installedAt: installation.installedAt ?? new Date(),
+      },
     );
   }
 
@@ -673,11 +688,13 @@ export class MemoryStore implements WhatsAppStore {
     if (!kept || kept.state === "removed") return false;
     const {
       businessToken: _token,
+      deliveryKey: _key,
       deliverySecret: _secret,
+      deliveryVersion: _version,
       pin: _pin,
       ...rest
     } = kept;
-    void [_token, _secret, _pin];
+    void [_token, _key, _secret, _version, _pin];
     await this.saveInstallation({
       ...rest,
       // The app's id stays; its secret and webhook address go.

@@ -3,6 +3,7 @@ import {
   DEFAULT_QUOTAS,
   DELIVERY_ROUTE,
   DeliveryPoller,
+  DeliveryRenewal,
   deliveryRoute,
   HostKeyCredentials,
   HttpAgentClient,
@@ -11,7 +12,7 @@ import {
 
 import { httpAsPerson } from "./as-person.js";
 import { readConfig } from "./config.js";
-import { deliverySinkOf } from "./deliveries.js";
+import { deliverySecretKeeper, deliverySinkOf } from "./deliveries.js";
 import { whatsappShape, type WhatsAppTurn } from "./domain.js";
 import { installRoutes } from "./install.js";
 import { manageRoutes, ownerCheckOf } from "./manage.js";
@@ -188,7 +189,22 @@ if (role === "worker" || role === "all") {
     },
   );
   poller.start(config.DATALAYER_DELIVERY_POLL_SECONDS);
-  stopPoller = () => poller.stop();
+  // A webhook whose secret rests on a key Datalayer no longer signs with is
+  // registered again, and its new secret kept where the old one was.
+  const renewal = new DeliveryRenewal(
+    deliverySinkOf(store, cipher),
+    hosts,
+    deliverySecretKeeper(store, cipher),
+    {
+      warn: (message: string) =>
+        logger.warn("delivery.not_renewed", { message }),
+    },
+  );
+  renewal.start();
+  stopPoller = () => {
+    poller.stop();
+    renewal.stop();
+  };
   hourly();
   timers.push(setInterval(hourly, HOUR_MS), setInterval(daily, 24 * HOUR_MS));
   for (const timer of timers) timer.unref();

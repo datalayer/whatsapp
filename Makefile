@@ -23,7 +23,10 @@
 #         ai-agents 0.0.94 refuses a bind without it).
 # 0.1.12: a company's sign-in shown in the chat, the turn going on (WA-42, e928f87); voice notes heard
 #         as the person by Datalayer's speech service, quoted back and asked (WA-18, 95eda03; needs speech:0.0.16).
-VERSION ?= 0.1.12
+# 0.1.13: deliveries under Datalayer's own key — the delivery secret kept with its key and version, a push
+#         naming the key kept, a keyless secret accepted until 31 December 2026 only, the webhook registered
+#         again when Datalayer asks (agent-runtimes 1.6.34's DeliveryRenewal; needs ai-agents 0.0.135).
+VERSION ?= 0.1.13
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 
