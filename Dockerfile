@@ -24,7 +24,6 @@ COPY package.json ./
 RUN npm install --omit=dev --ignore-scripts --no-audit --no-fund --no-package-lock \
   && npm cache clean --force
 COPY --from=build /app/dist ./dist
-COPY migrations ./migrations
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"

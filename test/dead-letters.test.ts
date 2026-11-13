@@ -1,60 +1,88 @@
 import { spawnSync } from "node:child_process";
 
-import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+
+import { textOf } from "../src/solr/client.js";
+import { documentOf, type SolrRecords } from "../src/solr/records.js";
+import { solrTestUrl, testCollection } from "./support/solr.js";
 
 /**
- * The dead-letters bin on a throwaway PostgreSQL
- * (`DATALAYER_WHATSAPP_TEST_DATABASE_URL`, never a cluster's): a dead job
- * listed without its words, its payload read for a stated reason, replayed
- * back to work once; every read and replay kept with the operator's name;
- * refused without one.
+ * The dead-letters bin on the file's own throwaway Solr collection
+ * (`DATALAYER_SOLR_TEST_URL`, never a cluster's): a dead job listed
+ * without its words, its payload read for a stated reason, replayed back to
+ * work once; every read and replay kept with the operator's name; refused
+ * without one, and without Solr's settings.
  */
-const DATABASE_URL = process.env.DATALAYER_WHATSAPP_TEST_DATABASE_URL;
+const COLLECTION = "test_whatsapp_dead_letters";
 
-describe.runIf(Boolean(DATABASE_URL))("dead letters on PostgreSQL", () => {
-  let database: pg.Pool;
-  beforeAll(async () => {
-    database = new pg.Pool({ connectionString: DATABASE_URL, max: 2 });
-    await database.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
-    expect(
-      spawnSync("node", ["--import", "tsx", "scripts/migrate.ts"], {
-        env: { ...process.env, DATABASE_URL },
-      }).status,
-    ).toBe(0);
-  }, 60_000);
-  afterAll(async () => {
-    await database?.end();
+describe("the dead-letters bin", () => {
+  it("refuses to start without Solr's settings", () => {
+    const run = spawnSync(
+      "node",
+      ["--import", "tsx", "src/dead-letters-cli.ts", "list"],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          DATALAYER_OPERATOR: "operator-ada",
+        },
+      },
+    );
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(
+      "DATALAYER_SOLR_URL, DATALAYER_SOLR_USERNAME, DATALAYER_SOLR_PASSWORD are required.",
+    );
   });
+});
+
+describe.runIf(Boolean(solrTestUrl))("dead letters on Solr", () => {
+  let records: SolrRecords;
+  beforeAll(async () => {
+    records = await testCollection(COLLECTION);
+  }, 60_000);
 
   const bin = (operator: string | undefined, ...args: string[]) =>
     spawnSync("node", ["--import", "tsx", "src/dead-letters-cli.ts", ...args], {
       encoding: "utf8",
       env: {
         ...process.env,
-        DATABASE_URL,
+        DATALAYER_SOLR_PASSWORD:
+          process.env.DATALAYER_SOLR_TEST_PASSWORD ?? "test-only",
+        DATALAYER_SOLR_URL: solrTestUrl,
+        DATALAYER_SOLR_USERNAME:
+          process.env.DATALAYER_SOLR_TEST_USERNAME ?? "solr",
+        DATALAYER_WHATSAPP_SOLR_COLLECTION: COLLECTION,
         ...(operator === undefined ? {} : { DATALAYER_OPERATOR: operator }),
       },
     });
 
   it("lists, reads for a reason and replays a dead job, each audited", async () => {
-    const { rows } = await database.query<{ id: string }>(
-      `INSERT INTO whatsapp_jobs (payload, state, attempts, last_error) VALUES
-         ($1, 'dead', 5, 'Meta answered 131056'),
-         ($2, 'ready', 0, NULL)
-       RETURNING id::text`,
-      [
-        {
-          kind: "message",
-          text: "the words of a dead question",
-          userId: "US.13491208655302741918",
-          wamid: "wamid.DEAD",
-        },
-        { kind: "message", text: "a live one", wamid: "wamid.LIVE" },
-      ],
+    const job = (payload: unknown, state: string, error?: string) =>
+      documentOf("job", null, {
+        attempts_i: state === "dead" ? 5 : 0,
+        available_dt: new Date(),
+        kind_s: "other",
+        last_error_stored: error,
+        payload_stored: JSON.stringify(payload),
+        state_s: state,
+      });
+    const dead = job(
+      {
+        kind: "message",
+        text: "the words of a dead question",
+        userId: "US.13491208655302741918",
+        wamid: "wamid.DEAD",
+      },
+      "dead",
+      "Meta answered 131056",
     );
-    const [dead, live] = rows.map((row) => row.id);
-    if (!dead || !live) throw new Error("the jobs were not made");
+    const live = job(
+      { kind: "message", text: "a live one", wamid: "wamid.LIVE" },
+      "ready",
+    );
+    await records.client.add([dead, live]);
+    const deadId = textOf(dead.uid);
+    const liveId = textOf(live.uid);
 
     const refused = bin(undefined, "list");
     expect(refused.status).toBe(1);
@@ -66,33 +94,37 @@ describe.runIf(Boolean(DATABASE_URL))("dead letters on PostgreSQL", () => {
     expect(list.stdout).not.toContain("the words of a dead question");
     expect(list.stdout).not.toContain("a live one");
 
-    const read = bin("operator-ada", "payload", dead, "why", "131056");
+    const read = bin("operator-ada", "payload", deadId, "why", "131056");
     expect(read.status).toBe(0);
     expect(read.stdout).toContain("the words of a dead question");
-    expect(bin("operator-ada", "payload", live, "not dead").status).not.toBe(0);
+    expect(bin("operator-ada", "payload", liveId, "not dead").status).not.toBe(
+      0,
+    );
 
-    expect(bin("operator-grace", "replay", dead).stdout).toContain(
-      `Job ${dead} is back to work.`,
+    expect(bin("operator-grace", "replay", deadId).stdout).toContain(
+      `Job ${deadId} is back to work.`,
     );
-    expect(bin("operator-grace", "replay", dead).stdout).toContain(
-      `Job ${dead} is not a dead job.`,
+    expect(bin("operator-grace", "replay", deadId).stdout).toContain(
+      `Job ${deadId} is not a dead job.`,
     );
-    const { rows: state } = await database.query<{ state: string }>(
-      "SELECT state FROM whatsapp_jobs WHERE id = $1",
-      [dead],
-    );
-    expect(state).toEqual([{ state: "ready" }]);
+    const { docs } = await records.client.search({
+      fq: ["type_s:job", `uid:${deadId}`],
+    });
+    expect(docs.map((doc) => doc.state_s)).toEqual(["ready"]);
 
-    const audit = await database.query<{ operator: string; what: string }>(
-      `SELECT operator, 'read:' || reason AS what FROM whatsapp_payload_access
-       UNION ALL
-       SELECT operator, 'replay:' || replayed FROM whatsapp_job_replays
-       ORDER BY what`,
+    const reads = await records.find<{ operator: string; reason: string }>(
+      "payload_access",
     );
-    expect(audit.rows).toEqual([
-      { operator: "operator-ada", what: "read:why 131056" },
-      { operator: "operator-grace", what: "replay:false" },
-      { operator: "operator-grace", what: "replay:true" },
+    const replays = await records.find<{ operator: string; replayed: boolean }>(
+      "job_replay",
+    );
+    expect([
+      ...reads.map((one) => `${one.operator} read:${one.reason}`),
+      ...replays.map((one) => `${one.operator} replay:${one.replayed}`),
+    ]).toEqual([
+      "operator-ada read:why 131056",
+      "operator-grace replay:true",
+      "operator-grace replay:false",
     ]);
   }, 60_000);
 });

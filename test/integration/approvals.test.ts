@@ -71,7 +71,7 @@ const press = (
     }),
   );
 
-describe.each(storeCases())("approvals on $name", ({ store }) => {
+describe.each(storeCases("approvals"))("approvals on $name", ({ store }) => {
   it("approves in two steps, on the digest shown, as the person", async () => {
     const h = harness(store());
     await shown(h);

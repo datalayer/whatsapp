@@ -1,61 +1,49 @@
-import { execFileSync } from "node:child_process";
+import { beforeAll, beforeEach } from "vitest";
 
-import pg from "pg";
-import { afterAll, beforeAll, beforeEach } from "vitest";
-
-import { PostgresStore } from "../../src/postgres-store.js";
+import type { SolrRecords } from "../../src/solr/records.js";
+import { SolrWhatsAppStore } from "../../src/solr-store.js";
 import { MemoryStore, type WhatsAppStore } from "../../src/store.js";
+import { solrTestUrl, testCollection } from "./solr.js";
 
 /**
- * The stores a contract test runs against: memory always, and PostgreSQL
- * when `DATALAYER_WHATSAPP_TEST_DATABASE_URL` names a throwaway database
- * (never a cluster's), its schema dropped, migrated, and its tables emptied
- * before each test.
+ * The stores a contract test runs against: memory always, and Solr when
+ * `DATALAYER_SOLR_TEST_URL` names a SolrCloud with the platform's configset
+ * (`test/support/solr.ts`): the test file's own throwaway collection,
+ * `test_whatsapp_<name>`, emptied before each test (its lock documents
+ * kept).
  */
-export const DATABASE_URL = process.env.DATALAYER_WHATSAPP_TEST_DATABASE_URL;
+export { solrTestUrl };
 
 export type StoreCase = Readonly<{
   name: string;
   store: () => WhatsAppStore;
-  /** The database, for a test that counts rows; memory has none. */
-  database: () => pg.Pool | undefined;
+  /** The collection, for a test that reads what is kept; memory has none. */
+  records: () => SolrRecords | undefined;
 }>;
 
 /** Register the hooks and answer the cases, for `describe.each`. */
-export function storeCases(): StoreCase[] {
-  let database: pg.Pool | undefined;
+export function storeCases(name: string): StoreCase[] {
+  let records: SolrRecords | undefined;
   let memory = new MemoryStore();
   beforeAll(async () => {
-    if (!DATABASE_URL) return;
-    database = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-    await database.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
-    execFileSync("node", ["--import", "tsx", "scripts/migrate.ts"], {
-      env: { ...process.env, DATABASE_URL },
-    });
+    if (!solrTestUrl) return;
+    records = await testCollection(`test_whatsapp_${name}`);
+    await records.init();
   }, 60_000);
   beforeEach(async () => {
     memory = new MemoryStore();
-    if (!database) return;
-    const { rows } = await database.query<{ name: string }>(
-      "SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public'",
-    );
-    await database.query(
-      `TRUNCATE ${rows.map((row) => row.name).join(", ")} RESTART IDENTITY`,
-    );
-  });
-  afterAll(async () => {
-    await database?.end();
+    await records?.client.deleteWhere("*:* -type_s:lock");
   });
   return [
-    { database: () => undefined, name: "memory", store: () => memory },
-    ...(DATABASE_URL
+    { name: "memory", records: () => undefined, store: () => memory },
+    ...(solrTestUrl
       ? [
           {
-            database: () => database,
-            name: "PostgreSQL",
+            name: "Solr",
+            records: () => records,
             store: () => {
-              if (!database) throw new Error("The database is not ready.");
-              return new PostgresStore(database);
+              if (!records) throw new Error("The collection is not ready.");
+              return new SolrWhatsAppStore(records);
             },
           },
         ]

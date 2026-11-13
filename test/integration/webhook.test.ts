@@ -1,10 +1,8 @@
-import { execFileSync } from "node:child_process";
-
-import { PostgresWorkQueue } from "@datalayer/agent-runtimes/lib/portable/hosts";
-import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { PostgresStore } from "../../src/postgres-store.js";
+import { SolrWorkQueue } from "../../src/solr/queue.js";
+import type { SolrRecords } from "../../src/solr/records.js";
+import { SolrWhatsAppStore } from "../../src/solr-store.js";
 import { MemoryStore, wamidHash, type WhatsAppStore } from "../../src/store.js";
 import { BODY_LIMIT, verifyTokenOf } from "../../src/verify.js";
 import {
@@ -26,6 +24,7 @@ import {
   webhook,
 } from "../support/meta.js";
 import { RecordingQueue } from "../support/queue.js";
+import { solrTestUrl, testCollection } from "../support/solr.js";
 import {
   APP_ID,
   installation,
@@ -241,7 +240,7 @@ describe("the webhook on a real socket", () => {
   it("answers 500 when a status could not be kept", async () => {
     const queue = new RecordingQueue<WhatsAppJob>();
     const failing: WhatsAppStore = Object.assign(new MemoryStore(), {
-      applyStatus: () => Promise.reject(new Error("The database is down.")),
+      applyStatus: () => Promise.reject(new Error("The store is down.")),
     });
     const { post } = await endpoint(queue, failing);
     const body = webhook({
@@ -335,31 +334,24 @@ describe("the webhook on a real socket", () => {
 });
 
 /**
- * The same ingress on PostgreSQL (`DATALAYER_WHATSAPP_TEST_DATABASE_URL`, a
- * throwaway database, never a cluster's): the claim and its job in one
- * transaction, a replay and a duplicate claiming nothing, the statuses'
- * rank held by one statement.
+ * The same ingress on Solr (`DATALAYER_SOLR_TEST_URL`, the file's own
+ * throwaway collection): the claim and its job written under the claim's
+ * lock, a replay and a duplicate claiming nothing, the statuses' rank held
+ * under the status's lock.
  */
-const DATABASE_URL = process.env.DATALAYER_WHATSAPP_TEST_DATABASE_URL;
-
-describe.runIf(Boolean(DATABASE_URL))("the webhook on PostgreSQL", () => {
-  let database: pg.Pool;
+describe.runIf(Boolean(solrTestUrl))("the webhook on Solr", () => {
+  let records: SolrRecords;
   let close: (() => Promise<void>) | undefined;
   beforeAll(async () => {
-    database = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-    await database.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
-    execFileSync("node", ["--import", "tsx", "scripts/migrate.ts"], {
-      env: { ...process.env, DATABASE_URL },
-    });
+    records = await testCollection("test_whatsapp_webhook");
   }, 60_000);
   afterAll(async () => {
     await close?.();
-    await database?.end();
   });
 
   it("claims each message once and keeps its job with its claim", async () => {
-    const queue = new PostgresWorkQueue<WhatsAppJob>(database, "whatsapp");
-    const store = new PostgresStore(database);
+    const queue = new SolrWorkQueue<WhatsAppJob>(records);
+    const store = new SolrWhatsAppStore(records);
     const cipher = testCipher();
     await store.saveInstallation(installation(cipher));
     const served = await serve(
@@ -393,25 +385,28 @@ describe.runIf(Boolean(DATABASE_URL))("the webhook on PostgreSQL", () => {
         )
       ).status,
     ).toBe(200);
-    const jobs = await database.query<{ payload: WhatsAppJob }>(
-      "SELECT payload FROM whatsapp_jobs ORDER BY id",
+    const { docs: jobs } = await records.client.search({
+      fq: ["type_s:job"],
+      sort: "uid asc",
+    });
+    const payloads = jobs.map(
+      (doc) => JSON.parse(String(doc.payload_stored)) as WhatsAppJob,
     );
     expect(
-      jobs.rows.map(
-        ({ payload }) => payload.kind === "message" && payload.wamid,
-      ),
+      payloads.map((payload) => payload.kind === "message" && payload.wamid),
     ).toEqual(["wamid.P1", "wamid.P2"]);
-    expect(JSON.stringify(jobs.rows)).not.toContain(ALICE_PHONE);
-    const claims = await database.query<{ event_id: string }>(
-      "SELECT event_id FROM whatsapp_event_claims ORDER BY event_id",
-    );
-    expect(claims.rows.map(({ event_id }) => event_id)).toEqual([
+    expect(JSON.stringify(jobs)).not.toContain(ALICE_PHONE);
+    const { docs: claims } = await records.client.search({
+      fq: ["type_s:claim"],
+      sort: "key_s asc",
+    });
+    expect(claims.map((doc) => doc.key_s)).toEqual([
       ...[
         `ingress:message:${wamidHash("wamid.P1")}`,
         `ingress:message:${wamidHash("wamid.P2")}`,
       ].sort(),
     ]);
-    expect(JSON.stringify(claims.rows)).not.toContain("wamid.");
+    expect(JSON.stringify(claims)).not.toContain("wamid.");
     for (const [status, timestamp] of [
       ["read", "1792670403"],
       ["delivered", "1792670402"],

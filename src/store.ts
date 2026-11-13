@@ -2,8 +2,8 @@ import type { EncryptedSecret } from "@datalayer/agent-runtimes/lib/portable/hos
 import { createHash } from "node:crypto";
 
 /**
- * What the service keeps, behind one interface: PostgreSQL in production
- * (`postgres-store.ts`), memory in development and tests. Each later piece
+ * What the service keeps, behind one interface: its Solr collection in
+ * production (`solr-store.ts`), memory in development and tests. Each later piece
  * of the service adds its rows here.
  */
 
@@ -236,7 +236,7 @@ export type Group = Readonly<{
   createdAt: Date;
 }>;
 
-/** What `retain` deleted, by table. */
+/** What `retain` deleted, by kind. */
 export type Retained = Record<string, number>;
 
 export interface WhatsAppStore {
@@ -296,7 +296,7 @@ export interface WhatsAppStore {
   /** Delete what is past its keeping (`RETENTION`), as of `now`. */
   retain(now: Date): Promise<Retained>;
 
-  /** A claim taken once (`false` when it was), in the kit's claims table. */
+  /** A claim taken once (`false` when it was), beside the queue's ingress claims. */
   claimEvent(id: string): Promise<boolean>;
   releaseEvent(id: string): Promise<void>;
 
@@ -496,7 +496,10 @@ export class MemoryStore implements WhatsAppStore {
   }
 
   async releaseHolds(key: ChatKey): Promise<Hold[]> {
-    const held = await this.holds(key);
+    // Read and taken in one step: racing releases each take a hold once.
+    const held = (this.#holds.get(chatKeyOf(key)) ?? []).map(
+      ({ heldAt, kind, ref }) => ({ heldAt, kind, ref }),
+    );
     this.#holds.delete(chatKeyOf(key));
     return held;
   }

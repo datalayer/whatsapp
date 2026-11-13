@@ -46,7 +46,7 @@ describe("the notice templates", () => {
   });
 });
 
-describe.each(storeCases())("the window on $name", ({ store }) => {
+describe.each(storeCases("window"))("the window on $name", ({ store }) => {
   const chat = { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE, wabaId: WABA };
   const setup = async (templates = true) => {
     const clock = { at: START, now: () => clock.at };

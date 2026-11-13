@@ -19,8 +19,21 @@ const schema = z
      * socket: there is no gateway role.
      */
     DATALAYER_WHATSAPP_ROLE: z.enum(["all", "ingress", "worker"]),
-    /** The durable store; only development and tests may run without one. */
-    DATABASE_URL: secret.optional(),
+    /**
+     * The durable store: the service's Solr collection, its base URL ending
+     * in `/solr` and its credentials. Only development and tests run
+     * without one, in memory.
+     */
+    DATALAYER_SOLR_URL: z
+      .url()
+      .regex(/\/solr\/?$/, "the Solr base URL, ending in /solr")
+      .optional(),
+    DATALAYER_SOLR_USERNAME: secret.optional(),
+    DATALAYER_SOLR_PASSWORD: secret.optional(),
+    DATALAYER_WHATSAPP_SOLR_COLLECTION: z
+      .string()
+      .regex(/^[a-z][a-z0-9_-]*$/, "a Solr collection name")
+      .default("whatsapp"),
     /**
      * What each webhook address's verify token is derived from (HMAC-SHA256
      * of its key): the service's own, generated once by the chart and kept.
@@ -53,8 +66,8 @@ const schema = z
     /** How often the worker reads the outbox of every number (0: never). */
     DATALAYER_DELIVERY_POLL_SECONDS: z.coerce.number().int().min(0).default(30),
     /**
-     * How many jobs the worker works at once (PostgreSQL): a `stop` is
-     * worked while its chat's turn runs.
+     * How many jobs the worker works at once (Solr): a `stop` is worked
+     * while its chat's turn runs.
      */
     DATALAYER_WHATSAPP_WORKERS: z.coerce
       .number()
@@ -64,18 +77,22 @@ const schema = z
       .default(4),
   })
   .superRefine((value, context) => {
-    if (value.NODE_ENV === "production" && !value.DATABASE_URL)
-      context.addIssue({
-        code: "custom",
-        path: ["DATABASE_URL"],
-        message: "production keeps its work in PostgreSQL",
-      });
-    if (value.DATALAYER_WHATSAPP_ROLE !== "all" && !value.DATABASE_URL)
-      context.addIssue({
-        code: "custom",
-        path: ["DATABASE_URL"],
-        message: `the ${value.DATALAYER_WHATSAPP_ROLE} role shares its durable queue in PostgreSQL`,
-      });
+    const why =
+      value.NODE_ENV === "production"
+        ? "production keeps its work in Solr"
+        : value.DATALAYER_WHATSAPP_ROLE !== "all"
+          ? `the ${value.DATALAYER_WHATSAPP_ROLE} role shares its durable queue in Solr`
+          : value.DATALAYER_SOLR_URL
+            ? "Solr is reached with its URL and credentials together"
+            : undefined;
+    if (!why) return;
+    for (const name of [
+      "DATALAYER_SOLR_URL",
+      "DATALAYER_SOLR_USERNAME",
+      "DATALAYER_SOLR_PASSWORD",
+    ] as const)
+      if (!value[name])
+        context.addIssue({ code: "custom", path: [name], message: why });
   });
 
 export type Config = z.infer<typeof schema>;

@@ -26,7 +26,10 @@
 # 0.1.13: deliveries under Datalayer's own key — the delivery secret kept with its key and version, a push
 #         naming the key kept, a keyless secret accepted until 31 December 2026 only, the webhook registered
 #         again when Datalayer asks (agent-runtimes 1.6.34's DeliveryRenewal; needs ai-agents 0.0.135).
-VERSION ?= 0.1.13
+# 0.1.14: v0.2.0 — the store, the queue, quotas and dead letters in the cluster's Solr collection `whatsapp`
+#        (src/solr/), PostgreSQL gone: no migrations, DATALAYER_SOLR_* in place of DATABASE_URL; a session
+#        uid is the runtime's ULID (8e446b9); agent-runtimes 1.6.41.
+VERSION ?= 0.1.14
 REGISTRY ?= $(DATALAYER_DOCKER_REGISTRY)
 EXPORT := $(HOME)/.cache/whatsapp-export-$(shell git rev-parse --short HEAD)
 

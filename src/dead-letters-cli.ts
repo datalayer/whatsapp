@@ -1,32 +1,45 @@
-import {
-  deadLetters,
-  runDeadLettersCli,
-} from "@datalayer/agent-runtimes/lib/portable/hosts";
-
-import { createDatabase } from "./database.js";
 import { WhatsAppLogger } from "./observability.js";
-import { TABLE_PREFIX } from "./tables.js";
+import { SolrClient } from "./solr/client.js";
+import { SolrDeadLetters, runDeadLettersCli } from "./solr/dead-letters.js";
+import { SolrWorkQueue } from "./solr/queue.js";
+import { SolrRecords } from "./solr/records.js";
 
 /**
  * `node dist/dead-letters.js list | replay <id> | payload <id> <reason…>`
- * against DATABASE_URL, as DATALAYER_OPERATOR: the shared host kit's dead
- * letters over `whatsapp_jobs`. `list` shows metadata and each payload's
- * hash, never a payload; `payload` shows one dead job's (credentials still
- * redacted) for a stated reason; `replay` puts a dead job back to work. Each
- * read and replay is kept with the operator's name and audited.
+ * against the service's Solr collection (`DATALAYER_SOLR_URL`,
+ * `DATALAYER_SOLR_USERNAME`, `DATALAYER_SOLR_PASSWORD`,
+ * `DATALAYER_WHATSAPP_SOLR_COLLECTION`), as DATALAYER_OPERATOR: the dead
+ * jobs of the Solr queue, each named by its uid. `list` shows metadata and
+ * each payload's hash, never a payload; `payload` shows one dead job's
+ * (credentials still redacted) for a stated reason; `replay` puts a dead
+ * job back to work. Each read and replay is kept with the operator's name
+ * and audited.
  */
-const url = process.env.DATABASE_URL;
-if (!url) {
-  console.error("DATABASE_URL is required.");
+const missing = [
+  "DATALAYER_SOLR_URL",
+  "DATALAYER_SOLR_USERNAME",
+  "DATALAYER_SOLR_PASSWORD",
+].filter((name) => !process.env[name]);
+if (missing.length) {
+  console.error(
+    `${missing.join(", ")} ${missing.length > 1 ? "are" : "is"} required.`,
+  );
   process.exit(1);
 }
-const database = createDatabase(url);
-try {
-  process.exitCode = await runDeadLettersCli(
-    deadLetters(database, TABLE_PREFIX, new WhatsAppLogger()),
-    process.argv.slice(2),
-    process.env.DATALAYER_OPERATOR?.trim() ?? "",
-  );
-} finally {
-  await database.end();
-}
+const records = new SolrRecords(
+  new SolrClient({
+    collection: process.env.DATALAYER_WHATSAPP_SOLR_COLLECTION ?? "whatsapp",
+    password: process.env.DATALAYER_SOLR_PASSWORD ?? "",
+    url: process.env.DATALAYER_SOLR_URL ?? "",
+    username: process.env.DATALAYER_SOLR_USERNAME ?? "",
+  }),
+);
+process.exitCode = await runDeadLettersCli(
+  new SolrDeadLetters(
+    new SolrWorkQueue<unknown>(records),
+    "whatsapp",
+    new WhatsAppLogger(),
+  ),
+  process.argv.slice(2),
+  process.env.DATALAYER_OPERATOR?.trim() ?? "",
+);

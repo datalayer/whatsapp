@@ -1,16 +1,17 @@
 import {
-  PostgresQuotaStore,
-  PostgresWorkQueue,
   quotaEntries,
   DEFAULT_QUOTAS,
   windowOf,
 } from "@datalayer/agent-runtimes/lib/portable/hosts";
 import { describe, expect, it } from "vitest";
 
+import { documentOf, type SolrRecords } from "../../src/solr/records.js";
+import { SolrWorkQueue } from "../../src/solr/queue.js";
+import { SolrQuotaStore } from "../../src/solr/quotas.js";
 import { RETENTION, wamidHash } from "../../src/store.js";
 import type { WhatsAppJob } from "../../src/webhook.js";
 import { ALICE, PHONE_NUMBER_ID, WABA } from "../support/meta.js";
-import { DATABASE_URL, storeCases } from "../support/stores.js";
+import { solrTestUrl, storeCases } from "../support/stores.js";
 
 /**
  * `forget` and retention, on each store: every row naming the person
@@ -39,7 +40,7 @@ const messageJob = (userId: string, wamid: string): WhatsAppJob => ({
   wamid,
 });
 
-const CASES = storeCases();
+const CASES = storeCases("store");
 
 describe.each(CASES)("forget and retention on $name", (cases) => {
   it("forgets every chat and hold of the person, on every number, and no one else's", async () => {
@@ -92,54 +93,161 @@ describe.each(CASES)("forget and retention on $name", (cases) => {
       statuses: 0,
     });
   });
+
+  it("keeps a message's furthest status, never a step back, by its id's hash only", async () => {
+    const store = cases.store();
+    const at = new Date("2026-10-21T12:00:00Z");
+    await store.applyStatus({
+      at,
+      phoneNumberId: "1",
+      status: "read",
+      wamid: "wamid.M1",
+    });
+    await store.applyStatus({
+      at,
+      phoneNumberId: "1",
+      status: "delivered",
+      wamid: "wamid.M1",
+    });
+    expect(await store.status("wamid.M1")).toEqual({
+      at,
+      phoneNumberId: "1",
+      status: "read",
+    });
+    const records = cases.records();
+    if (records) {
+      const { docs } = await records.client.search({
+        fq: ["type_s:message_status"],
+      });
+      expect(docs.map((doc) => doc.key_s)).toEqual([wamidHash("wamid.M1")]);
+      expect(JSON.stringify(docs)).not.toContain("wamid.");
+    }
+    await store.applyStatus({
+      at,
+      errorCode: 131026,
+      phoneNumberId: "1",
+      status: "failed",
+      wamid: "wamid.M1",
+    });
+    expect((await store.status("wamid.M1"))?.errorCode).toBe(131026);
+    expect(await store.status("wamid.none")).toBeUndefined();
+  });
+
+  it("takes a turn once among racing claims, and a lease past its time is taken over", async () => {
+    const store = cases.store();
+    const chat = chatOf(ALICE);
+    await store.recordInbound(chat, NOW);
+    const until = new Date(NOW.getTime() + 60_000);
+    const claims = await Promise.all(
+      ["w1", "w2", "w3", "w4"].map(async (owner) =>
+        store.claimTurn(chat, owner, until, NOW),
+      ),
+    );
+    expect(claims.filter((one) => one.ok)).toHaveLength(1);
+    const later = new Date(until.getTime() + 1);
+    expect(await store.claimTurn(chat, "w5", later, later)).toEqual({
+      ok: true,
+    });
+    expect((await store.chat(chat))?.turn).toEqual({
+      owner: "w5",
+      stop: false,
+      until: later,
+    });
+  });
+
+  it("holds a reference once and gives each hold out once to racing releases", async () => {
+    const store = cases.store();
+    const chat = chatOf(ALICE);
+    expect(await store.hold(chat, "delivery", "dl-1", NOW)).toBe(true);
+    expect(await store.hold(chat, "delivery", "dl-1", NOW)).toBe(false);
+    await store.hold(chat, "link", "ln-1", new Date(NOW.getTime() + 1));
+    const released = await Promise.all([
+      store.releaseHolds(chat),
+      store.releaseHolds(chat),
+    ]);
+    expect(released.flat().map((one) => one.ref)).toEqual(["dl-1", "ln-1"]);
+    expect(await store.holds(chat)).toEqual([]);
+  });
+
+  it("counts each message once among racing counts, and refuses a group id another group holds", async () => {
+    const store = cases.store();
+    await Promise.all(
+      Array.from({ length: 6 }, async () =>
+        store.countMessage(PHONE_NUMBER_ID, "2026-10", "service"),
+      ),
+    );
+    expect(await store.messageCounts(PHONE_NUMBER_ID, "2026-10")).toEqual({
+      service: 6,
+      utility: 0,
+    });
+    const group = {
+      createdAt: NOW,
+      phoneNumberId: PHONE_NUMBER_ID,
+      state: "creating" as const,
+      subject: "Desk",
+      wabaId: WABA,
+    };
+    await store.saveGroup({ ...group, groupId: "g-1", ref: "r-1" });
+    await store.saveGroup({ ...group, ref: "r-2" });
+    await expect(
+      store.updateGroup(PHONE_NUMBER_ID, "r-2", { groupId: "g-1" }),
+    ).rejects.toThrow(/another row holds/);
+    expect(
+      await store.updateGroup(PHONE_NUMBER_ID, "r-2", { groupId: "g-2" }),
+    ).toBe(true);
+    expect((await store.group(PHONE_NUMBER_ID, "g-2"))?.ref).toBe("r-2");
+  });
 });
 
 /**
- * The rows only PostgreSQL keeps: the queue's jobs and claims, the quota
- * counts. Counted before and after, on a throwaway database.
+ * What only the Solr collection keeps beside the store's records: the
+ * queue's jobs and claims, the quota counts. Counted before and after, in
+ * the test file's throwaway collection.
  */
-describe.runIf(Boolean(DATABASE_URL))(
-  "forget and retention on the shared tables",
+describe.runIf(Boolean(solrTestUrl))(
+  "forget and retention on the shared kinds",
   () => {
-    const postgres = CASES.find((one) => one.name === "PostgreSQL");
-
-    const naming = async (userId: string) => {
-      const database = postgres?.database();
-      if (!database) throw new Error("The database is not ready.");
-      const count = async (sql: string) =>
-        Number(
-          (await database.query<{ n: string }>(sql, [userId])).rows[0]?.n ?? 0,
-        );
-      return {
-        chats: await count(
-          "SELECT count(*) AS n FROM whatsapp_chat WHERE user_id = $1",
-        ),
-        holds: await count(
-          "SELECT count(*) AS n FROM whatsapp_hold WHERE user_id = $1",
-        ),
-        jobs: await count(
-          "SELECT count(*) AS n FROM whatsapp_jobs WHERE payload->>'userId' = $1",
-        ),
-        usage: await count(
-          "SELECT count(*) AS n FROM whatsapp_usage WHERE usage_key LIKE '%' || $1",
-        ),
-        // Anything else naming them, anywhere.
-        anywhere: await count(
-          `SELECT
-           (SELECT count(*) FROM whatsapp_event_claims WHERE event_id LIKE '%' || $1 || '%') +
-           (SELECT count(*) FROM whatsapp_message_status WHERE wamid_hash LIKE '%' || $1 || '%') AS n`,
-        ),
-      };
+    const solr = CASES.find((one) => one.name === "Solr");
+    const ready = () => {
+      const records = solr?.records();
+      const store = solr?.store();
+      if (!records || !store) throw new Error("The collection is not ready.");
+      return { records, store };
     };
 
-    it("counts every row naming the person before and after forget, and keeps the other person's", async () => {
-      const database = postgres?.database();
-      const store = postgres?.store();
-      if (!database || !store) throw new Error("The database is not ready.");
-      const queue = new PostgresWorkQueue<WhatsAppJob>(database, "whatsapp");
-      const quotas = new PostgresQuotaStore(database, {
-        tablePrefix: "whatsapp",
-      });
+    const jobsOf = async (records: SolrRecords) =>
+      (await records.client.search({ fq: ["type_s:job"], rows: 100 })).docs.map(
+        (doc) => ({
+          doc,
+          payload: JSON.parse(String(doc.payload_stored)) as Record<
+            string,
+            unknown
+          >,
+        }),
+      );
+
+    const naming = async (records: SolrRecords, userId: string) => ({
+      chats: await records.count("chat", { user_id_s: userId }),
+      holds: await records.count("hold", { user_id_s: userId }),
+      jobs: (await jobsOf(records)).filter(
+        (one) => one.payload.userId === userId,
+      ).length,
+      usage: (await records.find<{ key: string }>("usage")).filter((one) =>
+        one.key.endsWith(userId),
+      ).length,
+      // Anything else naming them, anywhere.
+      anywhere: (
+        await records.client.search({
+          fq: ["type_s:(claim OR message_status)"],
+          rows: 100,
+        })
+      ).docs.filter((doc) => JSON.stringify(doc).includes(userId)).length,
+    });
+
+    it("counts every record naming the person before and after forget, and keeps the other person's", async () => {
+      const { records, store } = ready();
+      const queue = new SolrWorkQueue<WhatsAppJob>(records);
+      const quotas = new SolrQuotaStore(records);
       for (const [n, userId] of [ALICE, BOB].entries()) {
         await store.recordInbound(chatOf(userId), NOW);
         await store.hold(chatOf(userId), "delivery", "dl-1", NOW);
@@ -161,72 +269,103 @@ describe.runIf(Boolean(DATABASE_URL))(
           windowOf(NOW),
         );
       }
-      await database.query(
-        "UPDATE whatsapp_jobs SET state = 'dead', attempts = 5 WHERE payload->>'wamid' LIKE 'wamid.D%'",
-      );
-      expect(await naming(ALICE)).toEqual({
-        anywhere: 0,
-        chats: 1,
-        holds: 1,
-        jobs: 2,
-        usage: 1,
-      });
+      for (const { doc, payload } of await jobsOf(records))
+        if (String(payload.wamid).startsWith("wamid.D"))
+          await records.client.add([
+            {
+              _version_: doc._version_,
+              attempts_i: { set: 5 },
+              id: doc.id,
+              state_s: { set: "dead" },
+            },
+          ]);
+      const both = { anywhere: 0, chats: 1, holds: 1, jobs: 2, usage: 1 };
+      expect(await naming(records, ALICE)).toEqual(both);
       expect(await store.forget(ALICE)).toBe(5);
-      expect(await naming(ALICE)).toEqual({
+      expect(await naming(records, ALICE)).toEqual({
         anywhere: 0,
         chats: 0,
         holds: 0,
         jobs: 0,
         usage: 0,
       });
-      expect(await naming(BOB)).toEqual({
-        anywhere: 0,
-        chats: 1,
-        holds: 1,
-        jobs: 2,
-        usage: 1,
-      });
+      expect(await naming(records, BOB)).toEqual(both);
       // The claims stay, by hash: a retried webhook is still refused.
-      const { rows } = await database.query<{ n: string }>(
-        "SELECT count(*) AS n FROM whatsapp_event_claims",
-      );
-      expect(Number(rows[0]?.n)).toBe(2);
-    });
+      expect(await records.count("claim")).toBe(2);
+    }, 60_000);
 
     it("forget leaves the job being worked to the queue", async () => {
-      const database = postgres?.database();
-      const store = postgres?.store();
-      if (!database || !store) throw new Error("The database is not ready.");
-      const queue = new PostgresWorkQueue<WhatsAppJob>(database, "whatsapp");
+      const { records, store } = ready();
+      const queue = new SolrWorkQueue<WhatsAppJob>(records);
       await queue.enqueue(messageJob(ALICE, "wamid.RUN"));
-      await database.query(
-        "UPDATE whatsapp_jobs SET state = 'processing', locked_at = now()",
-      );
+      for (const { doc } of await jobsOf(records))
+        await records.client.add([
+          {
+            _version_: doc._version_,
+            id: doc.id,
+            locked_dt: { set: new Date().toISOString() },
+            state_s: { set: "processing" },
+          },
+        ]);
       expect(await store.forget(ALICE)).toBe(0);
     });
 
     it("deletes claims after 8 days, dead jobs after 14, quota counts after a day, and nothing younger", async () => {
-      const database = postgres?.database();
-      const store = postgres?.store();
-      if (!database || !store) throw new Error("The database is not ready.");
+      const { records, store } = ready();
       const at = (days: number, ms: number) =>
         new Date(NOW.getTime() - days * DAY + ms);
-      await database.query(
-        `INSERT INTO whatsapp_event_claims (event_id, claimed_at) VALUES
-         ('ingress:message:old', $1), ('ingress:message:young', $2)`,
-        [at(RETENTION.claimMs / DAY, -1000), at(RETENTION.claimMs / DAY, 1000)],
-      );
-      await database.query(
-        `INSERT INTO whatsapp_jobs (payload, state, attempts, created_at) VALUES
-         ('{"n": 1}', 'dead', 5, $1), ('{"n": 2}', 'dead', 5, $2),
-         ('{"n": 3}', 'ready', 0, $1)`,
-        [at(14, -1000), at(14, 1000)],
-      );
-      await database.query(
-        `INSERT INTO whatsapp_usage (usage_key, usage_window, used) VALUES
-         ('user:x:US.1', $1, 1), ('user:x:US.1', $2, 1)`,
-        [windowOf(at(1, -60 * 60 * 1000)), windowOf(NOW)],
-      );
+      const made = (
+        kind: string,
+        record: unknown,
+        fields: Record<string, string | number>,
+        createdAt: Date,
+      ) => ({
+        ...documentOf(kind, record, fields),
+        creation_ts_dt: createdAt.toISOString(),
+      });
+      await records.client.add([
+        made(
+          "claim",
+          { eventId: "ingress:message:old" },
+          { key_s: "ingress:message:old" },
+          at(RETENTION.claimMs / DAY, -1000),
+        ),
+        made(
+          "claim",
+          { eventId: "ingress:message:young" },
+          { key_s: "ingress:message:young" },
+          at(RETENTION.claimMs / DAY, 1000),
+        ),
+        ...[
+          ["1", "dead", at(14, -1000)],
+          ["2", "dead", at(14, 1000)],
+          ["3", "ready", at(14, -1000)],
+        ].map(([n, state, created]) =>
+          made(
+            "job",
+            null,
+            {
+              attempts_i: 5,
+              payload_stored: JSON.stringify({ n }),
+              state_s: String(state),
+            },
+            created as Date,
+          ),
+        ),
+        ...[windowOf(at(1, -60 * 60 * 1000)), windowOf(NOW)].map((period) =>
+          made(
+            "usage",
+            { key: "user:x:US.1", period, used: 1 },
+            {
+              key_s: `${period}\u0000user:x:US.1`,
+              usage_key_s: "user:x:US.1",
+              usage_window_s: period,
+              used_i: 1,
+            },
+            NOW,
+          ),
+        ),
+      ]);
       expect(await store.retain(NOW)).toEqual({
         cards: 0,
         chats: 0,
@@ -236,16 +375,18 @@ describe.runIf(Boolean(DATABASE_URL))(
         statuses: 0,
         usage: 1,
       });
-      const left = async (sql: string) =>
-        (await database.query<{ v: string }>(sql)).rows.map((row) => row.v);
       expect(
-        await left("SELECT event_id AS v FROM whatsapp_event_claims"),
+        (await records.find<{ eventId: string }>("claim")).map(
+          (one) => one.eventId,
+        ),
       ).toEqual(["ingress:message:young"]);
       expect(
-        await left("SELECT payload->>'n' AS v FROM whatsapp_jobs ORDER BY id"),
+        (await jobsOf(records)).map((one) => one.payload.n).sort(),
       ).toEqual(["2", "3"]);
       expect(
-        await left("SELECT usage_window AS v FROM whatsapp_usage"),
+        (await records.find<{ period: string }>("usage")).map(
+          (one) => one.period,
+        ),
       ).toEqual([windowOf(NOW)]);
     });
   },

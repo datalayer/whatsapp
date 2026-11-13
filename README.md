@@ -43,7 +43,7 @@ The application's **Ship → WhatsApp** card manages them on a connected number,
 
 The status is Meta's `oba_status` (`NOT_STARTED`, `PENDING`, `UNDER_REVIEW`, `APPROVED`, `REJECTED`, `EXPIRED`, `CANCELLED`). The conditions are Meta's five, each `met`, `not_met` or `unknown`: the Business Messaging Policy (the business's own word), 30 days on the platform (counted here from the number's connection, a lower bound: Meta counts from its registration), the business portfolio's verification (`business_verification_status`), two-step verification (met when the service registered the number with its PIN, or the business gave it), the display name approved (`name_status`, in beta at Meta). A request goes to Meta's `POST /<phone_number_id>/official_business_account`; the same can be done in WhatsApp Manager (the number → Profile → Official business account → Submit Request). Meta's refusals are said in one sentence (`131215`: not eligible yet).
 
-A group is created by its subject; Meta answers its id at once or in the `group_lifecycle_update` webhook, matched by its request (or its subject, against Meta's list of the number's groups, when the webhook did not come). The service keeps a group's id, subject and state (`creating`, `active`, `suspended`, `failed`; migration 008), never a participant nor an invite link.
+A group is created by its subject; Meta answers its id at once or in the `group_lifecycle_update` webhook, matched by its request (or its subject, against Meta's list of the number's groups, when the webhook did not come). The service keeps a group's id, subject and state (`creating`, `active`, `suspended`, `failed`), never a participant nor an invite link.
 
 **In a group**, the application answers only when it is addressed: its name or the business's written in the message, the number @-mentioned, or a reply to one of the number's messages. It says nothing while the number is paused, when the group's rule is off (the channel rule `deny`, set on the card's _Where it answers_, by the group's id) or when the application is kept to direct chats (`direct_only`). The person asking must have linked their Datalayer account (told once a day in the group otherwise; visitors are not answered). One session per group (the runtime mints its uid, a ULID, kept on the group's chat until `start over` or a switch), each turn run as the person who asked and charged to their quota, one turn at a time; a turn's place is `{kind: "channel", id: <group_id>}`. The answer's words and documents are written in the group; what only a 1:1 chat takes — buttons, lists, _Open in Datalayer_ (a one-use link for one person), an approval's card — goes to the person's own chat while its window is open, with a short pointer in the group; a question's buttons too, and a press there answers in the group. An @-mention's phone number is replaced by `@someone` before the question reaches Datalayer. The 1:1 words (`help`, `link`, `stop`…) are not read in a group. Meta's group events (created, deleted, suspended, cleared) update the group; participant events are counted, their people dropped.
 
@@ -71,7 +71,7 @@ An answer holding anything shaped like a credential is never written in the chat
 
 Datalayer pushes what happens after a turn to `POST /datalayer/deliveries/{host}`, signed with the installation's delivery secret (the hosts kit's route: five minutes at most, each delivery queued once by its id); the worker also reads every number's outbox, for what a push missed. A delivery reaches the person's chat through the window keeper: inside the 24-hour window at once, outside it held by reference with one notice, and shown when the person replies. A removed number's deliveries are left unacknowledged and unshown.
 
-The delivery secret is kept with the key Datalayer derived it under (`ai-agents-host-deliveries-v<N>`) and the registration's version (migration `009`), and a push must name that key (`X-Datalayer-Delivery-Key`); a secret kept without one was derived from the platform's shared secret and is accepted until 31 December 2026, 00:00 UTC only. At start and every hour the worker asks Datalayer whether each number's webhook must be registered again (`GET /apps/hosts/self` answers `delivery.renew`), registers it again at the same address and keeps the new secret, key and version where the old ones were (the kit's `DeliveryRenewal`; `delivery.not_renewed` logged on failure, the outbox carrying the deliveries meanwhile).
+The delivery secret is kept with the key Datalayer derived it under (`ai-agents-host-deliveries-v<N>`) and the registration's version, and a push must name that key (`X-Datalayer-Delivery-Key`); a secret kept without one was derived from the platform's shared secret and is accepted until 31 December 2026, 00:00 UTC only. At start and every hour the worker asks Datalayer whether each number's webhook must be registered again (`GET /apps/hosts/self` answers `delivery.renew`), registers it again at the same address and keeps the new secret, key and version where the old ones were (the kit's `DeliveryRenewal`; `delivery.not_renewed` logged on failure, the outbox carrying the deliveries meanwhile).
 
 An approval that waits on a linked person is one card in their chat, at most 1,024 characters: the application, the action, every material value whole, its age; **Approve**, **Reject**, **Show more**. A press answers a second message naming the action again, **Yes** or **No**; **Yes** decides at Datalayer as the person, on exactly what the card showed, once. A request that changed since its card answers _This changed — see the new request_ and the new card; a decided, expired or someone else's request is said so; there is no edit, so each outcome is a new message. Anything a host may not decide (today everything but mail), or that does not fit, is **Review in Datalayer** only, a one-use link for the person. A personal agent's operation at a company (PAP) shows its exact revision.
 
@@ -87,13 +87,13 @@ WhatsApp lets a business say anything for 24 hours after the person's last messa
 
 ## Retention
 
-Every hour the worker deletes chats and what they hold 30 days after the person's last message, message statuses after 30 days, claims after 8 days (Meta retries a webhook for 7), dead jobs after 14 days and quota counts after a day. Message ids are kept only as their SHA-256 (they may embed a phone number). `forget` deletes every row naming the person at once.
+Every hour the worker deletes chats and what they hold 30 days after the person's last message, message statuses after 30 days, claims after 8 days (Meta retries a webhook for 7), dead jobs after 14 days and quota counts after a day. Message ids are kept only as their SHA-256 (they may embed a phone number). `forget` deletes every record naming the person at once.
 
 ## Logs and dead letters
 
 Logs are JSON lines through the hosts kit's logger (credentials and words redacted by field and shape), and WhatsApp's own scrub on top: a phone number in any writing becomes `[phone]`, a BSUID its pseudonym (salted with `DATALAYER_WHATSAPP_LOG_SALT`), wherever it appears. Spans name a number and a person by pseudonym only; counters (`turns`, `messages` by category, `notices`, `holds`, `pair_rate_limited`, `window` inside or outside) are `metric` lines.
 
-A job that fails five times is dead, kept 14 days. `node dist/dead-letters.js list | replay <id> | payload <id> <reason…>` (in development `node --import tsx src/dead-letters-cli.ts …`) against `DATABASE_URL`, with `DATALAYER_OPERATOR` naming who acts: `list` shows metadata and hashes only, `payload` one dead job's for a stated reason, `replay` puts it back to work; every read and replay is kept with the operator's name.
+A job that fails five times is dead, kept 14 days. `node dist/dead-letters.js list | replay <id> | payload <id> <reason…>` (in development `node --import tsx src/dead-letters-cli.ts …`) against the Solr collection (`DATALAYER_SOLR_URL`, `DATALAYER_SOLR_USERNAME`, `DATALAYER_SOLR_PASSWORD`, `DATALAYER_WHATSAPP_SOLR_COLLECTION`), with `DATALAYER_OPERATOR` naming who acts; a job is named by its uid (a ULID). There is no database role of its own any more: the bin reads and writes the collection with the service's Solr credentials, and `DATALAYER_OPERATOR` is what names who acted: `list` shows metadata and hashes only, `payload` one dead job's for a stated reason, `replay` puts it back to work; every read and replay is kept with the operator's name.
 
 ## Security and privacy
 
@@ -101,22 +101,25 @@ A job that fails five times is dead, kept 14 days. `node dist/dead-letters.js li
 
 ## Settings
 
-| Setting                                 | What it is                                                                        |
-| --------------------------------------- | --------------------------------------------------------------------------------- |
-| `NODE_ENV`                              | `development`, `test` or `production`                                             |
-| `PORT`                                  | The HTTP port (3000)                                                              |
-| `DATALAYER_WHATSAPP_ROLE`               | `ingress`, `worker`, or `all` (one process, development only)                     |
-| `DATABASE_URL`                          | PostgreSQL; required in production and for every role but `all`                   |
-| `DATALAYER_WHATSAPP_VERIFY_SECRET`      | What each webhook address's verify token is derived from, at least 32 characters  |
-| `DATALAYER_WHATSAPP_LOG_SALT`           | What log pseudonyms are salted with (optional; `datalayer-whatsapp` otherwise)    |
-| `DATALAYER_WHATSAPP_GRAPH_URL`          | The Graph API and its version (`https://graph.facebook.com/v23.0`)                |
-| `DATALAYER_WHATSAPP_SECRET_KEY`         | 32 bytes, base64: encrypts every secret at rest (host keys, business tokens)      |
-| `DATALAYER_WHATSAPP_SECRET_KEY_VERSION` | The key's version (1)                                                             |
-| `DATALAYER_WHATSAPP_APP_URL`            | The service's public address (the install, Datalayer's deliveries)                |
-| `DATALAYER_API_URL`                     | Datalayer's API (ai-agents, the session API)                                      |
-| `DATALAYER_WEB_URL`                     | Datalayer's web origin (links, _Open in Datalayer_, the Ship card)                |
-| `DATALAYER_DELIVERY_POLL_SECONDS`       | How often the outbox is read (30; 0 never)                                        |
-| `DATALAYER_WHATSAPP_WORKERS`            | Jobs the worker works at once on PostgreSQL (4), so `stop` reaches a running turn |
+| Setting                                 | What it is                                                                              |
+| --------------------------------------- | --------------------------------------------------------------------------------------- |
+| `NODE_ENV`                              | `development`, `test` or `production`                                                   |
+| `PORT`                                  | The HTTP port (3000)                                                                    |
+| `DATALAYER_WHATSAPP_ROLE`               | `ingress`, `worker`, or `all` (one process, development only)                           |
+| `DATALAYER_SOLR_URL`                    | Solr's base URL, ending in `/solr`; required in production and for every role but `all` |
+| `DATALAYER_SOLR_USERNAME`               | Solr's user, required with the URL                                                      |
+| `DATALAYER_SOLR_PASSWORD`               | Solr's password, required with the URL                                                  |
+| `DATALAYER_WHATSAPP_SOLR_COLLECTION`    | The service's collection (`whatsapp`)                                                   |
+| `DATALAYER_WHATSAPP_VERIFY_SECRET`      | What each webhook address's verify token is derived from, at least 32 characters        |
+| `DATALAYER_WHATSAPP_LOG_SALT`           | What log pseudonyms are salted with (optional; `datalayer-whatsapp` otherwise)          |
+| `DATALAYER_WHATSAPP_GRAPH_URL`          | The Graph API and its version (`https://graph.facebook.com/v23.0`)                      |
+| `DATALAYER_WHATSAPP_SECRET_KEY`         | 32 bytes, base64: encrypts every secret at rest (host keys, business tokens)            |
+| `DATALAYER_WHATSAPP_SECRET_KEY_VERSION` | The key's version (1)                                                                   |
+| `DATALAYER_WHATSAPP_APP_URL`            | The service's public address (the install, Datalayer's deliveries)                      |
+| `DATALAYER_API_URL`                     | Datalayer's API (ai-agents, the session API)                                            |
+| `DATALAYER_WEB_URL`                     | Datalayer's web origin (links, _Open in Datalayer_, the Ship card)                      |
+| `DATALAYER_DELIVERY_POLL_SECONDS`       | How often the outbox is read (30; 0 never)                                              |
+| `DATALAYER_WHATSAPP_WORKERS`            | Jobs the worker works at once on Solr (4), so `stop` reaches a running turn             |
 
 No setting names a Meta app: each application's own app's id and secret come from its card and are kept encrypted with its installation. Keep every value in a password manager until it reaches `.env` (development) or the Secret; never paste one into an issue, a chat, a commit or the shell's history.
 
@@ -126,21 +129,21 @@ No setting names a Meta app: each application's own app's id and secret come fro
 npm install
 npm run fetch:agent-runtimes   # standalone clone only: agent-runtimes' lib/portable, pinned in package.json
 npm run dev                    # all roles in one process, in memory
-npm test                       # memory; PostgreSQL too with DATALAYER_WHATSAPP_TEST_DATABASE_URL
+npm test                       # memory; Solr too with DATALAYER_SOLR_TEST_URL
 npm run check                  # format, lint, types, the bundle gate, tests, the bundle
 ```
 
-The PostgreSQL tests drop and remake the `public` schema of the database `DATALAYER_WHATSAPP_TEST_DATABASE_URL` names: point it at a throwaway database, never a shared one.
+The Solr tests make a throwaway collection per test file (`test_whatsapp_*`) from a configset already uploaded to a SolrCloud: point `DATALAYER_SOLR_TEST_URL` at a local one, never a cluster's (`DATALAYER_SOLR_TEST_USERNAME` and `DATALAYER_SOLR_TEST_PASSWORD` when it asks for them).
 
 ```bash
-docker run --rm -d --name whatsapp-test-pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=whatsapp -p 55432:5432 postgres:16.4-alpine
-DATALAYER_WHATSAPP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/whatsapp npm test
-docker rm -f whatsapp-test-pg
+DATALAYER_SOLR_TEST_URL=http://localhost:8983/solr DATALAYER_SOLR_TEST_CONFIGSET=whatsapp-conf npm test
 ```
 
-## Database
+## Storage
 
-`npm run migrate` (`node dist/migrate.js` in the image) applies the host kit's shared tables under the `whatsapp_` prefix (claims, jobs, usage, payload access, replays), then `migrations/` in order; each file is idempotent and re-applied every time. Migration 007 refuses to run while a number connected through Datalayer's former Embedded Signup is still connected (disconnect it in Datalayer; the daily reconciliation removes it), purges the removed ones, and drops their `way`.
+Everything the service keeps is in one Solr collection (`whatsapp`, from the platform's configset), one document per object: `type_s` its kind, `uid` a ULID the service mints, `id` made by Solr, the object whole in `record_stored` (secrets as encrypted by `SecretCipher`), and only the fields searched, sorted or purged on beside it. The kinds and their natural keys (`key_s`): `message_status` (the message id's hash), `chat` (number, person or group), `hold` (chat, kind, reference), `template` (account, name), `message_count` (number, month, category), `installation` (account, number), `approval_card` (chat, approval), `group` (number, ref); the queue's `job`, `claim` (`ingress:<key>` and the account events' claims), `job_replay` and `payload_access`, and the quota counts' `usage` (key and hour).
+
+Solr makes the only unique field, `id`, so a natural key is kept unique by a lock: every write of a keyed record runs under its key's lease lock (a fixed set of `lock` documents taken with optimistic concurrency on their `_version_`, held 15 seconds at most), where it reads, checks and writes back. A turn taken only when free, a status that never steps back, a count, a claim taken once and what must stay unique beside a key (an installation's host and webhook key, a group's Meta id) are decided under it. The queue claims a job by its `_version_`, renews its lease while worked, retries it with backoff, makes it dead after five attempts and takes it back when its worker stopped for five minutes; the worker's queues (`DATALAYER_WHATSAPP_WORKERS`) share the collection. The lock documents are made at first start; nothing is migrated.
 
 ## Image
 

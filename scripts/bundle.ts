@@ -25,7 +25,6 @@ export const BUNDLE: BuildOptions = {
   entryPoints: {
     "dead-letters": "src/dead-letters-cli.ts",
     index: "src/index.ts",
-    migrate: "scripts/migrate.ts",
   },
   external: DEPENDENCIES,
   format: "esm",

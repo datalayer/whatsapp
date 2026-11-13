@@ -112,105 +112,108 @@ const last = (h: Harness) => h.meta.sent().at(-1) as Card;
  */
 const KIT_DECIDES_PAP = renderApproval(papPresentation()).complete;
 
-describe.each(storeCases())("a PAP operation on $name", ({ store }) => {
-  it.skipIf(!KIT_DECIDES_PAP)(
-    "is confirmed from the chat in two steps, on its exact revision, as the linked person",
-    async () => {
-      const h = harness(store());
-      await shown(h, papPresentation());
-      const card = last(h);
-      expect(card.type).toBe("buttons");
-      expect(card.body).toContain(
-        "asks you to confirm an operation at manzanita.example, exactly revision 3.",
-      );
-      expect(card.body).toContain("*Revision:* 3");
-      expect(card.body).toContain("*price:* 0 EUR");
-      await press(h, "approve");
-      const step = last(h);
-      expect(step.body).toMatch(
-        /^Approve: confirm at manzanita\.example, revision 3/,
-      );
-      expect(step.buttons?.map((one) => one.id)).toEqual([
-        approvalPressId("yes-approve", "ap-1"),
-        approvalPressId("no", "ap-1"),
-      ]);
-      await press(h, "yes-approve");
-      // Decided at Datalayer as the linked person, on the revision shown.
-      expect(h.asPerson.decisions).toEqual([
-        {
-          approvalId: "ap-1",
-          approve: true,
-          digest: "3".repeat(64),
-          userId: ALICE,
-        },
-      ]);
-      expect(h.meta.said().at(-1)).toMatch(
-        /^Approved by you at \d\d:\d\d UTC\.$/,
-      );
-      // Nothing of who the person is at Datalayer or at the company is said.
-      const said = h.meta.said().join("\n");
-      expect(said).not.toContain(`principal-${ALICE}`);
-      expect(said).not.toContain(ALICE);
-    },
-  );
-
-  it.skipIf(!KIT_DECIDES_PAP)(
-    "refuses a press on a revision the company changed, and sends the new revision's card",
-    async () => {
-      const h = harness(store());
-      await shown(h, papPresentation(3));
-      // The company proposes revision 4 before the person answers.
-      h.asPerson.approvals.get("ap-1")!.presentation = papPresentation(4);
-      await press(h, "approve");
-      expect(h.meta.said().slice(-2)[0]).toBe(WORDS.changed);
-      expect(last(h).body).toContain("exactly revision 4");
-      expect(h.asPerson.decisions).toEqual([]);
-      // The new card decides revision 4, and only it.
-      await press(h, "approve");
-      await press(h, "yes-approve");
-      expect(h.asPerson.decisions).toEqual([
-        {
-          approvalId: "ap-1",
-          approve: true,
-          digest: "4".repeat(64),
-          userId: ALICE,
-        },
-      ]);
-    },
-  );
-
-  it.skipIf(!KIT_DECIDES_PAP)(
-    "says This changed when Datalayer finds the revision stale at the decision",
-    async () => {
-      const h = harness(store());
-      await shown(h, papPresentation(3));
-      await press(h, "approve");
-      // Between the second step and the decision, Datalayer's digest moved on.
-      const kept = h.asPerson.approvals.get("ap-1")!;
-      const original = kept.presentation;
-      let reads = 0;
-      Object.defineProperty(kept, "presentation", {
-        configurable: true,
-        get: () => (reads++ === 0 ? original : papPresentation(5)),
-        set: () => {},
-      });
-      await press(h, "yes-approve");
-      expect(h.meta.said().at(-1)).toBe(WORDS.changed);
-      expect(h.asPerson.decisions).toEqual([]);
-    },
-  );
-
-  it("stays Review in Datalayer for a pap_confirm Datalayer does not let a host decide", async () => {
-    const h = harness(store());
-    await shown(
-      h,
-      papPresentation(3, {
-        host_may_decide: false,
-        reasons: ["It does not say revision: it is decided in Datalayer."],
-      }),
+describe.each(storeCases("pap_operations"))(
+  "a PAP operation on $name",
+  ({ store }) => {
+    it.skipIf(!KIT_DECIDES_PAP)(
+      "is confirmed from the chat in two steps, on its exact revision, as the linked person",
+      async () => {
+        const h = harness(store());
+        await shown(h, papPresentation());
+        const card = last(h);
+        expect(card.type).toBe("buttons");
+        expect(card.body).toContain(
+          "asks you to confirm an operation at manzanita.example, exactly revision 3.",
+        );
+        expect(card.body).toContain("*Revision:* 3");
+        expect(card.body).toContain("*price:* 0 EUR");
+        await press(h, "approve");
+        const step = last(h);
+        expect(step.body).toMatch(
+          /^Approve: confirm at manzanita\.example, revision 3/,
+        );
+        expect(step.buttons?.map((one) => one.id)).toEqual([
+          approvalPressId("yes-approve", "ap-1"),
+          approvalPressId("no", "ap-1"),
+        ]);
+        await press(h, "yes-approve");
+        // Decided at Datalayer as the linked person, on the revision shown.
+        expect(h.asPerson.decisions).toEqual([
+          {
+            approvalId: "ap-1",
+            approve: true,
+            digest: "3".repeat(64),
+            userId: ALICE,
+          },
+        ]);
+        expect(h.meta.said().at(-1)).toMatch(
+          /^Approved by you at \d\d:\d\d UTC\.$/,
+        );
+        // Nothing of who the person is at Datalayer or at the company is said.
+        const said = h.meta.said().join("\n");
+        expect(said).not.toContain(`principal-${ALICE}`);
+        expect(said).not.toContain(ALICE);
+      },
     );
-    expect(last(h).type).toBe("cta");
-    await press(h, "yes-approve");
-    expect(h.asPerson.decisions).toEqual([]);
-  });
-});
+
+    it.skipIf(!KIT_DECIDES_PAP)(
+      "refuses a press on a revision the company changed, and sends the new revision's card",
+      async () => {
+        const h = harness(store());
+        await shown(h, papPresentation(3));
+        // The company proposes revision 4 before the person answers.
+        h.asPerson.approvals.get("ap-1")!.presentation = papPresentation(4);
+        await press(h, "approve");
+        expect(h.meta.said().slice(-2)[0]).toBe(WORDS.changed);
+        expect(last(h).body).toContain("exactly revision 4");
+        expect(h.asPerson.decisions).toEqual([]);
+        // The new card decides revision 4, and only it.
+        await press(h, "approve");
+        await press(h, "yes-approve");
+        expect(h.asPerson.decisions).toEqual([
+          {
+            approvalId: "ap-1",
+            approve: true,
+            digest: "4".repeat(64),
+            userId: ALICE,
+          },
+        ]);
+      },
+    );
+
+    it.skipIf(!KIT_DECIDES_PAP)(
+      "says This changed when Datalayer finds the revision stale at the decision",
+      async () => {
+        const h = harness(store());
+        await shown(h, papPresentation(3));
+        await press(h, "approve");
+        // Between the second step and the decision, Datalayer's digest moved on.
+        const kept = h.asPerson.approvals.get("ap-1")!;
+        const original = kept.presentation;
+        let reads = 0;
+        Object.defineProperty(kept, "presentation", {
+          configurable: true,
+          get: () => (reads++ === 0 ? original : papPresentation(5)),
+          set: () => {},
+        });
+        await press(h, "yes-approve");
+        expect(h.meta.said().at(-1)).toBe(WORDS.changed);
+        expect(h.asPerson.decisions).toEqual([]);
+      },
+    );
+
+    it("stays Review in Datalayer for a pap_confirm Datalayer does not let a host decide", async () => {
+      const h = harness(store());
+      await shown(
+        h,
+        papPresentation(3, {
+          host_may_decide: false,
+          reasons: ["It does not say revision: it is decided in Datalayer."],
+        }),
+      );
+      expect(last(h).type).toBe("cta");
+      await press(h, "yes-approve");
+      expect(h.asPerson.decisions).toEqual([]);
+    });
+  },
+);

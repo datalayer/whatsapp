@@ -29,15 +29,40 @@ describe("the settings", () => {
     ).toThrow(/DATALAYER_WHATSAPP_VERIFY_SECRET: at least 32 characters/);
   });
 
-  it("keeps production, and every role apart, on PostgreSQL", () => {
+  it("keeps production, and every role apart, on Solr", () => {
     expect(() =>
       readConfig({ ...ENVIRONMENT, NODE_ENV: "production" }),
-    ).toThrow(/production keeps its work in PostgreSQL/);
+    ).toThrow(/DATALAYER_SOLR_URL: production keeps its work in Solr/);
     expect(() =>
       readConfig({ ...ENVIRONMENT, DATALAYER_WHATSAPP_ROLE: "ingress" }),
-    ).toThrow(/the ingress role shares its durable queue/);
+    ).toThrow(/the ingress role shares its durable queue in Solr/);
     expect(() =>
       readConfig({ ...ENVIRONMENT, DATALAYER_WHATSAPP_ROLE: "gateway" }),
     ).toThrow(/DATALAYER_WHATSAPP_ROLE/);
+    expect(() =>
+      readConfig({
+        ...ENVIRONMENT,
+        DATALAYER_SOLR_URL: "http://solr.example.test:8983/solr",
+      }),
+    ).toThrow(/DATALAYER_SOLR_PASSWORD: Solr is reached with its URL/);
+    expect(() =>
+      readConfig({
+        ...ENVIRONMENT,
+        DATALAYER_SOLR_PASSWORD: "test-only",
+        DATALAYER_SOLR_URL: "http://solr.example.test:8983/",
+        DATALAYER_SOLR_USERNAME: "solr",
+      }),
+    ).toThrow(/ending in \/solr/);
+    const config = readConfig({
+      ...ENVIRONMENT,
+      DATALAYER_SOLR_PASSWORD: "test-only",
+      DATALAYER_SOLR_URL: "http://solr.example.test:8983/solr",
+      DATALAYER_SOLR_USERNAME: "solr",
+      DATALAYER_WHATSAPP_ROLE: "worker",
+      NODE_ENV: "production",
+    });
+    expect(config.DATALAYER_WHATSAPP_SOLR_COLLECTION).toBe("whatsapp");
+    // PostgreSQL is gone: no setting names it.
+    expect(SETTINGS).not.toContain("DATABASE_URL");
   });
 });

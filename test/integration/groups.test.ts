@@ -195,7 +195,7 @@ describe("the ingress, for groups", () => {
   });
 });
 
-describe.each(storeCases())("groups on $name", ({ store }) => {
+describe.each(storeCases("groups"))("groups on $name", ({ store }) => {
   it("keeps a group, gives it its id, and forgets it with its conversation", async () => {
     const kept = store();
     await kept.saveGroup(

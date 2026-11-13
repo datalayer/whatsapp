@@ -76,7 +76,7 @@ async function ready(h: Harness, at = h.clock.now()) {
   return kept;
 }
 
-describe.each(storeCases())("deliveries on $name", ({ store }) => {
+describe.each(storeCases("deliveries"))("deliveries on $name", ({ store }) => {
   let close: (() => Promise<void>) | undefined;
   afterEach(async () => {
     await close?.();

@@ -55,7 +55,7 @@ describe("a word is the whole message", () => {
 const textOf = (replies: Reply[]): string =>
   replies.map((reply) => reply.text).join("\n");
 
-describe.each(storeCases())("the words on $name", ({ store }) => {
+describe.each(storeCases("commands"))("the words on $name", ({ store }) => {
   const chat = { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE, wabaId: WABA };
   const setup = async (standing: Standing, turn?: () => Promise<void>) => {
     const hosts = new FakeHosts();

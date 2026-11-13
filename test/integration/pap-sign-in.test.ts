@@ -58,133 +58,141 @@ async function ready(h: Harness) {
   await h.store.markDisclosed(chat);
 }
 
-describe.each(storeCases())("a PAP sign-in in a turn on $name", ({ store }) => {
-  it("shows Direct Sign-In as a button to the start link at once, once per call, and the turn goes on", async () => {
-    const h = harness(store());
-    await ready(h);
-    h.agent.script = [
-      { id: "call-1", kind: "tool", name: "pap_sign_in", status: "complete" },
-      direct,
-      // The same call's event again: shown once.
-      direct,
-      { kind: "text", text: "Signed in: your balance is 42." },
-      { kind: "completion" },
-    ];
-    await h.worker.handle(h.job("What is my balance at Manzanita?"));
-    const sent = h.meta.sentTo("individual");
-    expect(sent).toEqual([
-      {
-        body: "Sign in to manzanita.example. Open the company's page through Datalayer and sign in there; write here again once you are back.",
-        label: "Sign in to manzanit…",
-        type: "cta",
-        url: START,
-      },
-      { text: "Signed in: your balance is 42.", type: "text" },
-    ]);
-    // Nothing of the link in the logs: the ticket is the person's alone.
-    const logs = h.lines.join("\n");
-    expect(logs).toContain("turn.sign_in");
-    expect(logs).not.toContain("one-use-ticket");
-    expect(logs).not.toContain("pap/start");
-  });
-
-  it("shows Device Sign-In as the code with a button to the company's page", async () => {
-    const h = harness(store());
-    await ready(h);
-    h.agent.script = [
-      device,
-      { kind: "text", text: "Done." },
-      { kind: "completion" },
-    ];
-    await h.worker.handle(h.job());
-    const [first] = h.meta.sentTo("individual");
-    expect(first).toMatchObject({
-      label: "Open manzanita.exam…",
-      type: "cta",
-      url: "https://manzanita.example/device",
-    });
-    expect((first as { body: string }).body).toContain("*WDJB-MJHT*");
-    expect((first as { body: string }).body).toContain(
-      "Manzanita (manzanita.example)",
-    );
-    expect(h.lines.join("\n")).not.toContain("WDJB-MJHT");
-  });
-
-  it("refuses a page that is not https, showing no link", async () => {
-    const h = harness(store());
-    await ready(h);
-    h.agent.script = [
-      {
-        ...direct,
-        signIn: {
-          host: "manzanita.example",
-          mode: "direct",
-          open: "http://manzanita.example/",
+describe.each(storeCases("pap_sign_in"))(
+  "a PAP sign-in in a turn on $name",
+  ({ store }) => {
+    it("shows Direct Sign-In as a button to the start link at once, once per call, and the turn goes on", async () => {
+      const h = harness(store());
+      await ready(h);
+      h.agent.script = [
+        { id: "call-1", kind: "tool", name: "pap_sign_in", status: "complete" },
+        direct,
+        // The same call's event again: shown once.
+        direct,
+        { kind: "text", text: "Signed in: your balance is 42." },
+        { kind: "completion" },
+      ];
+      await h.worker.handle(h.job("What is my balance at Manzanita?"));
+      const sent = h.meta.sentTo("individual");
+      expect(sent).toEqual([
+        {
+          body: "Sign in to manzanita.example. Open the company's page through Datalayer and sign in there; write here again once you are back.",
+          label: "Sign in to manzanit…",
+          type: "cta",
+          url: START,
         },
-      },
-      { kind: "completion", text: "Could not sign in." },
-    ];
-    await h.worker.handle(h.job());
-    const sent = h.meta.sentTo("individual");
-    expect(sent[0]).toEqual({ text: PAP_SIGN_IN_WORDS.refused, type: "text" });
-    expect(JSON.stringify(sent)).not.toContain("http://manzanita.example");
-  });
+        { text: "Signed in: your balance is 42.", type: "text" },
+      ]);
+      // Nothing of the link in the logs: the ticket is the person's alone.
+      const logs = h.lines.join("\n");
+      expect(logs).toContain("turn.sign_in");
+      expect(logs).not.toContain("one-use-ticket");
+      expect(logs).not.toContain("pap/start");
+    });
 
-  it("in a group, sends the button to the asker's own chat with a pointer in the group; never the link in the group", async () => {
-    const h = harness(store());
-    await ready(h);
-    await h.store.saveGroup({
-      createdAt: new Date(Date.UTC(2026, 9, 22)),
-      groupId: GROUP,
-      phoneNumberId: PHONE_NUMBER_ID,
-      ref: "ref-0000000001",
-      state: "active",
-      subject: "Launch team",
-      wabaId: WABA,
+    it("shows Device Sign-In as the code with a button to the company's page", async () => {
+      const h = harness(store());
+      await ready(h);
+      h.agent.script = [
+        device,
+        { kind: "text", text: "Done." },
+        { kind: "completion" },
+      ];
+      await h.worker.handle(h.job());
+      const [first] = h.meta.sentTo("individual");
+      expect(first).toMatchObject({
+        label: "Open manzanita.exam…",
+        type: "cta",
+        url: "https://manzanita.example/device",
+      });
+      expect((first as { body: string }).body).toContain("*WDJB-MJHT*");
+      expect((first as { body: string }).body).toContain(
+        "Manzanita (manzanita.example)",
+      );
+      expect(h.lines.join("\n")).not.toContain("WDJB-MJHT");
     });
-    const ask = (text: string): MessageJob => h.job(text, { groupId: GROUP });
-    h.agent.script = [
-      direct,
-      { kind: "text", text: "Signed in." },
-      { kind: "completion" },
-    ];
-    await h.worker.handle(ask("Help Desk, my balance?"));
-    const personal = h.meta.sentTo("individual");
-    expect(personal).toEqual([
-      expect.objectContaining({ type: "cta", url: START }),
-    ]);
-    const group = h.meta.sentTo("group");
-    expect(group).toContainEqual({
-      text: GROUP_WORDS.signIn("Alice, ", "Acme SRL"),
-      type: "text",
-    });
-    expect(JSON.stringify(group)).not.toContain("one-use-ticket");
-  });
 
-  it("in a group, with the asker's own chat closed, tells them to write first and shows the link nowhere", async () => {
-    const h = harness(store());
-    await h.connect();
-    await h.store.saveGroup({
-      createdAt: new Date(Date.UTC(2026, 9, 22)),
-      groupId: GROUP,
-      phoneNumberId: PHONE_NUMBER_ID,
-      ref: "ref-0000000001",
-      state: "active",
-      subject: "Launch team",
-      wabaId: WABA,
+    it("refuses a page that is not https, showing no link", async () => {
+      const h = harness(store());
+      await ready(h);
+      h.agent.script = [
+        {
+          ...direct,
+          signIn: {
+            host: "manzanita.example",
+            mode: "direct",
+            open: "http://manzanita.example/",
+          },
+        },
+        { kind: "completion", text: "Could not sign in." },
+      ];
+      await h.worker.handle(h.job());
+      const sent = h.meta.sentTo("individual");
+      expect(sent[0]).toEqual({
+        text: PAP_SIGN_IN_WORDS.refused,
+        type: "text",
+      });
+      expect(JSON.stringify(sent)).not.toContain("http://manzanita.example");
     });
-    h.agent.script = [
-      direct,
-      { kind: "text", text: "Not yet." },
-      { kind: "completion" },
-    ];
-    await h.worker.handle(h.job("Help Desk, my balance?", { groupId: GROUP }));
-    expect(h.meta.sentTo("individual")).toEqual([]);
-    const group = h.meta.sentTo("group");
-    expect(group).toContainEqual({
-      text: GROUP_WORDS.writeFirst("Alice, ", "Acme SRL"),
-      type: "text",
+
+    it("in a group, sends the button to the asker's own chat with a pointer in the group; never the link in the group", async () => {
+      const h = harness(store());
+      await ready(h);
+      await h.store.saveGroup({
+        createdAt: new Date(Date.UTC(2026, 9, 22)),
+        groupId: GROUP,
+        phoneNumberId: PHONE_NUMBER_ID,
+        ref: "ref-0000000001",
+        state: "active",
+        subject: "Launch team",
+        wabaId: WABA,
+      });
+      const ask = (text: string): MessageJob => h.job(text, { groupId: GROUP });
+      h.agent.script = [
+        direct,
+        { kind: "text", text: "Signed in." },
+        { kind: "completion" },
+      ];
+      await h.worker.handle(ask("Help Desk, my balance?"));
+      const personal = h.meta.sentTo("individual");
+      expect(personal).toEqual([
+        expect.objectContaining({ type: "cta", url: START }),
+      ]);
+      const group = h.meta.sentTo("group");
+      expect(group).toContainEqual({
+        text: GROUP_WORDS.signIn("Alice, ", "Acme SRL"),
+        type: "text",
+      });
+      expect(JSON.stringify(group)).not.toContain("one-use-ticket");
     });
-    expect(JSON.stringify(group)).not.toContain("one-use-ticket");
-  });
-});
+
+    it("in a group, with the asker's own chat closed, tells them to write first and shows the link nowhere", async () => {
+      const h = harness(store());
+      await h.connect();
+      await h.store.saveGroup({
+        createdAt: new Date(Date.UTC(2026, 9, 22)),
+        groupId: GROUP,
+        phoneNumberId: PHONE_NUMBER_ID,
+        ref: "ref-0000000001",
+        state: "active",
+        subject: "Launch team",
+        wabaId: WABA,
+      });
+      h.agent.script = [
+        direct,
+        { kind: "text", text: "Not yet." },
+        { kind: "completion" },
+      ];
+      await h.worker.handle(
+        h.job("Help Desk, my balance?", { groupId: GROUP }),
+      );
+      expect(h.meta.sentTo("individual")).toEqual([]);
+      const group = h.meta.sentTo("group");
+      expect(group).toContainEqual({
+        text: GROUP_WORDS.writeFirst("Alice, ", "Acme SRL"),
+        type: "text",
+      });
+      expect(JSON.stringify(group)).not.toContain("one-use-ticket");
+    });
+  },
+);

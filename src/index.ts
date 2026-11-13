@@ -37,6 +37,8 @@ const config = readConfig();
 const logger = new WhatsAppLogger();
 const metrics = new Metrics(logger);
 const resources = createResources(config);
+// The Solr collection's lock documents, made once before anything is kept.
+await resources.start();
 const { store, queue, cipher } = resources;
 const role = config.DATALAYER_WHATSAPP_ROLE;
 
@@ -123,7 +125,7 @@ const server = createHttpServer(resources.checks, routes, (error) =>
   logger.info("service.started", {
     port: config.PORT,
     role,
-    store: config.DATABASE_URL ? "postgres" : "memory",
+    store: config.DATALAYER_SOLR_URL ? "solr" : "memory",
   }),
 );
 

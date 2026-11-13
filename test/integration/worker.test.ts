@@ -28,7 +28,7 @@ const chat = { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE };
 const paragraph = (length: number, letter: string) =>
   `${letter.repeat(length - 1)}.`;
 
-describe.each(storeCases())("a turn on $name", ({ store }) => {
+describe.each(storeCases("worker"))("a turn on $name", ({ store }) => {
   it("answers a question whole: the disclosure once, read and typing once, the session continued", async () => {
     const h = harness(store());
     await h.connect();
@@ -339,7 +339,8 @@ describe.each(storeCases())("a turn on $name", ({ store }) => {
     expect(h.meta.said().at(-1)).toBe("template:datalayer_turn_done");
     expect(h.meta.said()).not.toContain("Late answer.");
     const session = h.agent.minted[0];
-    h.asPerson.answers.set(session, "Late answer.");
+    expect(session).toBeDefined();
+    h.asPerson.answers.set(session!, "Late answer.");
     h.clock.advance(HOUR);
     await h.worker.handle(
       h.job(undefined, {

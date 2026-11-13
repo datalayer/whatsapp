@@ -5,8 +5,8 @@ export default defineConfig({
     environment: "node",
     globals: true,
     include: ["test/**/*.test.ts"],
-    // One file at a time: the PostgreSQL files share one throwaway database,
-    // which migrate.test.ts drops and remakes.
+    // One file at a time: against a real Solr each file makes its own
+    // throwaway collection, and one at a time keeps the cluster's load low.
     fileParallelism: false,
     server: {
       deps: {

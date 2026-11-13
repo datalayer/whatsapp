@@ -4,7 +4,7 @@ import type { WorkQueue } from "@datalayer/agent-runtimes/lib/portable/hosts";
  * A queue that keeps what it is given and runs nothing: what the ingress
  * enqueued, under which key, for a test to read. Its claims behave as the
  * durable queue's (a second job under a key is refused); `failures` makes
- * the next enqueues throw, as a database that is down would.
+ * the next enqueues throw, as a store that is down would.
  */
 export class RecordingQueue<T> implements WorkQueue<T> {
   readonly items: { item: T; key?: string }[] = [];
@@ -14,7 +14,7 @@ export class RecordingQueue<T> implements WorkQueue<T> {
   async enqueue(item: T, idempotencyKey?: string): Promise<boolean> {
     if (this.failures > 0) {
       this.failures -= 1;
-      throw new Error("The database is down.");
+      throw new Error("The store is down.");
     }
     if (idempotencyKey) {
       if (this.#keys.has(idempotencyKey)) return false;

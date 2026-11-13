@@ -44,7 +44,7 @@ const voiceNote = (h: Harness, id = NOTE): MessageJob => {
   return job;
 };
 
-describe.each(storeCases())("a voice note on $name", ({ store }) => {
+describe.each(storeCases("voice"))("a voice note on $name", ({ store }) => {
   it("is heard as the person on the answering application, quoted back, and asked", async () => {
     const h = harness(store());
     await ready(h);
