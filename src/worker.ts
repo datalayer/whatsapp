@@ -751,7 +751,8 @@ export class Worker {
         wabaId: job.wabaId,
         wamid: job.wamid,
       },
-      sessionGeneration: kept.generation,
+      // The chat's session for this generation; without one the runtime
+      // mints a new one, kept below from the turn.
       ...(same && kept.sessionUid ? { sessionId: kept.sessionUid } : {}),
     };
     let stream;

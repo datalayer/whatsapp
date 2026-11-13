@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { SAY } from "../../src/commands.js";
-import { sessionUidOf } from "../../src/domain.js";
 import { LIMITS } from "../../src/meta-port.js";
 import { STOP_ID, WORDS } from "../../src/render.js";
 import { PART_SPACING_MS } from "../../src/speaker.js";
@@ -49,7 +48,6 @@ describe.each(storeCases())("a turn on $name", ({ store }) => {
       externalUserId: ALICE,
       principalId: `principal-${ALICE}`,
       prompt: "What changed this week?",
-      sessionGeneration: 0,
     });
     expect(request?.sessionId).toBeUndefined();
     // The message is named by its id's hash: the id may embed a phone number.
@@ -57,10 +55,6 @@ describe.each(storeCases())("a turn on $name", ({ store }) => {
       host_kind: "whatsapp",
       message_id: wamidHash(first.wamid),
       place: { id: ALICE, kind: "direct" },
-      thread: sessionUidOf(
-        { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE, wabaId: WABA },
-        0,
-      ),
     });
     expect(JSON.stringify(h.agent.provenances[0])).not.toContain("wamid.");
     expect(h.metrics.total("turns")).toBe(1);
@@ -68,12 +62,8 @@ describe.each(storeCases())("a turn on $name", ({ store }) => {
     h.clock.advance(60 * SECOND);
     await h.worker.handle(h.job("And last week?"));
     expect(h.meta.said()).toHaveLength(3);
-    expect(h.agent.started[1]?.sessionId).toBe(
-      sessionUidOf(
-        { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE, wabaId: WABA },
-        0,
-      ),
-    );
+    // The session the runtime minted for the first turn, kept on the chat.
+    expect(h.agent.started[1]?.sessionId).toBe(h.agent.minted[0]);
     expect(await h.window.usage(PHONE_NUMBER_ID)).toMatchObject({
       service: 3,
       utility: 0,
@@ -144,10 +134,7 @@ describe.each(storeCases())("a turn on $name", ({ store }) => {
       await h.worker.handle(h.job("STOP "));
     };
     await h.worker.handle(h.job());
-    const session = sessionUidOf(
-      { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE, wabaId: WABA },
-      0,
-    );
+    const session = h.agent.minted[0];
     expect(h.agent.stopped).toEqual([session]);
     expect(h.meta.said().filter((one) => one === SAY.stopped)).toHaveLength(1);
     expect(h.meta.said().join("\n")).not.toContain("Thinking");
@@ -211,12 +198,7 @@ describe.each(storeCases())("a turn on $name", ({ store }) => {
     );
     expect(h.agent.started[1]).toMatchObject({
       prompt: "Pro",
-      sessionId:
-        h.agent.started[0] &&
-        sessionUidOf(
-          { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE, wabaId: WABA },
-          0,
-        ),
+      sessionId: h.agent.minted[0],
     });
     expect(h.meta.said().at(-1)).toBe("Pro it is.");
     expect((await h.store.chat(chat))?.asking).toBeUndefined();
@@ -246,10 +228,7 @@ describe.each(storeCases())("a turn on $name", ({ store }) => {
     expect(h.asPerson.handoffs).toEqual([
       {
         kind: "session",
-        target: sessionUidOf(
-          { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE, wabaId: WABA },
-          0,
-        ),
+        target: h.agent.minted[0],
         userId: ALICE,
       },
     ]);
@@ -277,12 +256,16 @@ describe.each(storeCases())("a turn on $name", ({ store }) => {
     await h.worker.handle(h.job());
     await h.worker.handle(h.job("start over"));
     await h.worker.handle(h.job("Fresh question"));
-    expect(
-      h.agent.started.map((one) => [one.sessionGeneration, one.sessionId]),
-    ).toEqual([
-      [0, undefined],
-      [1, undefined],
+    // Start over drops the chat's session: the next turn opens a new one.
+    expect(h.agent.started.map((one) => one.sessionId)).toEqual([
+      undefined,
+      undefined,
     ]);
+    expect(h.agent.minted).toHaveLength(2);
+    expect(await h.store.chat(chat)).toMatchObject({
+      generation: 1,
+      sessionUid: h.agent.minted[1],
+    });
   });
 
   it("tells a second message that an answer runs", async () => {
@@ -355,10 +338,7 @@ describe.each(storeCases())("a turn on $name", ({ store }) => {
     await h.worker.handle(h.job());
     expect(h.meta.said().at(-1)).toBe("template:datalayer_turn_done");
     expect(h.meta.said()).not.toContain("Late answer.");
-    const session = sessionUidOf(
-      { phoneNumberId: PHONE_NUMBER_ID, userId: ALICE, wabaId: WABA },
-      0,
-    );
+    const session = h.agent.minted[0];
     h.asPerson.answers.set(session, "Late answer.");
     h.clock.advance(HOUR);
     await h.worker.handle(

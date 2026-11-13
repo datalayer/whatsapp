@@ -1,7 +1,6 @@
 import type { HostDelivery } from "@datalayer/agent-runtimes/lib/portable/hosts";
 import { describe, expect, it } from "vitest";
 
-import { sessionUidOf } from "../../src/domain.js";
 import { GROUP_WORDS, names, promptOf } from "../../src/groups.js";
 import { checkLimits } from "../../src/meta-port.js";
 import { WORDS } from "../../src/render.js";
@@ -247,20 +246,10 @@ describe.each(storeCases())("groups on $name", ({ store }) => {
       principalId: `principal-${ALICE}`,
       prompt: "Help Desk, what changed this week?",
     });
-    const session = sessionUidOf(
-      {
-        groupId: GROUP,
-        phoneNumberId: PHONE_NUMBER_ID,
-        userId: ALICE,
-        wabaId: WABA,
-      },
-      0,
-    );
     expect(h.agent.provenances[0]).toEqual({
       host_kind: "whatsapp",
       message_id: wamidHash(first.wamid),
       place: { id: GROUP, kind: "channel" },
-      thread: session,
     });
     // The group's 1:1 window is not Alice's: her own chat was not opened.
     expect(
@@ -279,7 +268,8 @@ describe.each(storeCases())("groups on $name", ({ store }) => {
       externalUserId: BOB,
       principalId: `principal-${BOB}`,
       prompt: "@someone and last week?",
-      sessionId: session,
+      // The group's one session, as the runtime minted it on the first turn.
+      sessionId: h.agent.minted[0],
     });
     expect(groupSaid(h)).toHaveLength(3);
   });
@@ -467,15 +457,8 @@ describe.each(storeCases())("groups on $name", ({ store }) => {
   it("shows a group turn's answer from its delivery in the group, and an approval in the person's chat with a pointer", async () => {
     const h = harness(store());
     const kept = await ready(h);
-    const session = sessionUidOf(
-      {
-        groupId: GROUP,
-        phoneNumberId: PHONE_NUMBER_ID,
-        userId: ALICE,
-        wabaId: WABA,
-      },
-      0,
-    );
+    // The group's session, as the runtime minted it before.
+    const session = "01KA0000000000000000000000";
     const chat = {
       phoneNumberId: PHONE_NUMBER_ID,
       userId: GROUP,

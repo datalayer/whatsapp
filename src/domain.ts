@@ -1,5 +1,4 @@
 import {
-  hostSessionUid,
   type HostShape,
   type HostTurnRequest,
   type Place,
@@ -10,8 +9,9 @@ import { wamidHash } from "./store.js";
 
 /**
  * What is WhatsApp's own in a turn: the installation's external id, the
- * chat's session uid, the place Datalayer checks its rules against, the
- * delivery target and the provenance sent with the turn. The rest is the
+ * place Datalayer checks its rules against, the delivery target and the
+ * provenance sent with the turn. A chat's (or a group's) session uid is the
+ * runtime's (a ULID), kept on the chat for its generation. The rest is the
  * shared host kit's.
  */
 
@@ -69,22 +69,6 @@ export function placeOf(turn: Pick<WhatsAppTurn, "userId" | "groupId">): Place {
 }
 
 /**
- * `whatsapp-<40 hex>` over the business account, the number and the person
- * for a 1:1 chat, or the group's id for a group: one session per group,
- * whoever asks in it.
- */
-export function sessionUidOf(
-  turn: Pick<WhatsAppTurn, "wabaId" | "phoneNumberId" | "userId" | "groupId">,
-  generation?: number,
-): string {
-  return hostSessionUid(
-    HOST_KIND,
-    [turn.wabaId, turn.phoneNumberId, turn.groupId ?? turn.userId],
-    generation,
-  );
-}
-
-/**
  * The delivery target handed back with every delivery: the number and the
  * person, and the group when the turn was asked in one; validated again
  * when it comes back (`targetSchema`).
@@ -112,14 +96,12 @@ export const whatsappShape: HostShape<WhatsAppTurn> = {
     "This number is not connected to Datalayer. Its owner connects it from the application's Ship tab in Datalayer.",
   placeOf: (request) => placeOf(request.provenance),
   // On the turn itself, at most 1 KiB. Meta's message ids have been seen to
-  // embed a phone number: the message is named by its id's hash.
+  // embed a phone number: the message is named by its id's hash. A chat or
+  // a group has no thread: its place names it.
   provenanceOf: (request) => ({
     host_kind: HOST_KIND,
     message_id: wamidHash(request.provenance.wamid),
     place: placeOf(request.provenance),
-    thread: sessionUidOf(request.provenance, request.sessionGeneration),
   }),
-  sessionUidOf: (request) =>
-    sessionUidOf(request.provenance, request.sessionGeneration),
   targetOf: (request) => targetOf(request.provenance),
 };

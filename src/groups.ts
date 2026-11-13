@@ -42,7 +42,7 @@ import type { Worker } from "./worker.js";
  * application is kept to direct conversations (`direct_only`). The person
  * who asks must have linked their Datalayer account (visitors wait on
  * WA-03 and WA-10); told so in the group once a day. One session per group
- * (`hostSessionUid` over the account, the number and the group's id), each
+ * (the runtime's, kept on the group's chat for its generation), each
  * turn run as the person who asked, quotas charged to them; one turn at a
  * time in a group. The answer's words and documents are written in the
  * group; what only a 1:1 chat takes — buttons, lists, a one-use link to
@@ -277,7 +277,6 @@ export class GroupConversations {
           wabaId: job.wabaId,
           wamid: job.wamid,
         },
-        sessionGeneration: kept.generation,
         ...(same && kept.sessionUid ? { sessionId: kept.sessionUid } : {}),
       };
       let stream;

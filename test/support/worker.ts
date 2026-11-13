@@ -381,6 +381,8 @@ export class FakeAgent implements AgentClient<WhatsAppTurn> {
   readonly started: HostTurnRequest<WhatsAppTurn>[] = [];
   readonly provenances: unknown[] = [];
   readonly stopped: string[] = [];
+  /** The sessions it opened, as the runtime mints them: ULIDs. */
+  readonly minted: string[] = [];
   script: Script = [{ kind: "text", text: "Hello." }, { kind: "completion" }];
   refuse?: Error;
   /** Called after a turn started and before its stream: a test waits there. */
@@ -391,7 +393,7 @@ export class FakeAgent implements AgentClient<WhatsAppTurn> {
   async startTurn(request: HostTurnRequest<WhatsAppTurn>): Promise<TurnStream> {
     this.started.push(request);
     if (this.refuse) throw this.refuse;
-    const sessionId = request.sessionId ?? whatsappShape.sessionUidOf(request);
+    const sessionId = request.sessionId ?? this.#mint();
     this.provenances.push(whatsappShape.provenanceOf?.(request));
     const script = this.script;
     const clock = this.clock;
@@ -415,6 +417,12 @@ export class FakeAgent implements AgentClient<WhatsAppTurn> {
         }
       })(),
     };
+  }
+
+  #mint(): string {
+    const uid = `01KA${String(this.minted.length + 1).padStart(22, "0")}`;
+    this.minted.push(uid);
+    return uid;
   }
 
   async stopTurn(sessionId: string): Promise<void> {

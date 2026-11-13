@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import {
   externalIdOf,
   placeOf,
-  sessionUidOf,
   targetOf,
   targetSchema,
   whatsappShape,
@@ -17,8 +16,8 @@ import { wamidHash } from "../src/store.js";
  * The service's shapes against WhatsApp's forms of the host contracts, as
  * agent-runtimes ships them (`contracts.json`, byte-identical to
  * ai-agents' fixture): the installation's external id, the person as a
- * direct place (the longest BSUID, 131 characters, included), the chat's
- * session uid, the provenance and the delivery target.
+ * direct place (the longest BSUID, 131 characters, included), a group as a
+ * channel, the provenance and the delivery target.
  */
 
 const WHATSAPP = (
@@ -37,9 +36,7 @@ const WHATSAPP = (
       external_user_id: string;
       external_user_id_longest: string;
       direct: { place: { kind: string; id: string } };
-      session: { parts: [string, string, string]; uid: string };
       group: { id: string; place: { kind: string; id: string } };
-      group_session: { parts: [string, string, string]; uid: string };
       provenance: {
         host_kind: string;
         place: { kind: string; id: string };
@@ -64,18 +61,7 @@ describe("WhatsApp's forms of the host contracts", () => {
     );
   });
 
-  it("derives the chat's session uid from the contract's parts", () => {
-    const [wabaId, phoneNumberId, userId] = WHATSAPP.session.parts;
-    expect(sessionUidOf({ phoneNumberId, userId, wabaId })).toBe(
-      WHATSAPP.session.uid,
-    );
-  });
-
-  it("derives a group's one session uid from the contract's parts, and names it a channel", () => {
-    const [wabaId, phoneNumberId, groupId] = WHATSAPP.group_session.parts;
-    expect(
-      sessionUidOf({ groupId, phoneNumberId, userId: turn.userId, wabaId }),
-    ).toBe(WHATSAPP.group_session.uid);
+  it("names a group a channel", () => {
     expect(
       placeOf({ groupId: WHATSAPP.group.id, userId: turn.userId }),
     ).toEqual(WHATSAPP.group.place);
@@ -104,6 +90,10 @@ describe("WhatsApp's forms of the host contracts", () => {
       host_kind: WHATSAPP.provenance.host_kind,
       place: WHATSAPP.provenance.place,
     });
+    // The contract's keys, no thread: a chat's place names it.
+    expect(Object.keys(provenance ?? {}).sort()).toEqual(
+      Object.keys(WHATSAPP.provenance).sort(),
+    );
     // Meta's message ids may embed a phone number: never sent as they are.
     expect(provenance?.message_id).toBe(
       wamidHash(WHATSAPP.provenance.message_id),
